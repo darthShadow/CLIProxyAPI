@@ -1812,7 +1812,9 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 	now := time.Now()
 	available, selectorAuths, errAvailable := m.availableAuthsForSelector(selector, candidates, provider, model, now)
 	if errAvailable != nil {
+		errAvailable = heldSessionErrorForUnavailablePool(selector, provider, selectionArgForSelector(selector, model), opts, candidates, errAvailable)
 		m.mu.RUnlock()
+		errAvailable = m.heldSessionRetryAfter(errAvailable, model, time.Now())
 		m.warnLogAuthUnavailable(ctx, []string{provider}, model, opts, tried, errAvailable)
 		return nil, nil, errAvailable
 	}
@@ -1829,6 +1831,7 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 		selectorCtx = withSessionAffinityTransientAuthIDs(selectorCtx, transientAuthIDs)
 		selected, errPick = selector.Pick(selectorCtx, provider, selectionArgForSelector(selector, model), opts, selectorAuths)
 		if errPick != nil {
+			errPick = m.heldSessionRetryAfter(errPick, model, time.Now())
 			if isBuiltInSelector(selector) {
 				errPick = restoreModelCooldownErrorModel(errPick, model)
 			}
@@ -2158,7 +2161,9 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 	now := time.Now()
 	available, selectorAuths, errAvailable := m.availableAuthsForSelector(selector, candidates, "mixed", model, now)
 	if errAvailable != nil {
+		errAvailable = heldSessionErrorForUnavailablePool(selector, "mixed", selectionArgForSelector(selector, model), opts, candidates, errAvailable)
 		m.mu.RUnlock()
+		errAvailable = m.heldSessionRetryAfter(errAvailable, model, time.Now())
 		m.warnLogAuthUnavailable(ctx, providers, model, opts, tried, errAvailable)
 		return nil, nil, "", errAvailable
 	}
@@ -2175,6 +2180,7 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 		selectorCtx = withSessionAffinityTransientAuthIDs(selectorCtx, transientAuthIDs)
 		selected, errPick = selector.Pick(selectorCtx, "mixed", selectionArgForSelector(selector, model), opts, selectorAuths)
 		if errPick != nil {
+			errPick = m.heldSessionRetryAfter(errPick, model, time.Now())
 			if isBuiltInSelector(selector) {
 				errPick = restoreModelCooldownErrorModel(errPick, model)
 			}

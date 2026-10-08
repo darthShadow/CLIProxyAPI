@@ -65,6 +65,9 @@ func tokenizerForCodexModel(model string) (tokenizer.Codec, error) {
 	switch {
 	case sanitized == "":
 		return tokenizer.Get(tokenizer.Cl100kBase)
+	case strings.HasPrefix(sanitized, "gpt-6"):
+		// Release 1 (R1-K2): the GPT-6 line uses o200k, like gpt-5.
+		return tokenizer.Get(tokenizer.O200kBase)
 	case strings.HasPrefix(sanitized, "gpt-5"):
 		return tokenizer.ForModel(tokenizer.GPT5)
 	case strings.HasPrefix(sanitized, "gpt-4.1"):
@@ -90,6 +93,7 @@ func countCodexInputTokens(enc tokenizer.Codec, body []byte) (int64, error) {
 
 	root := gjson.ParseBytes(body)
 	var segments []string
+	var imageParts int64
 
 	if inst := strings.TrimSpace(root.Get("instructions").String()); inst != "" {
 		segments = append(segments, inst)
@@ -107,6 +111,10 @@ func countCodexInputTokens(enc tokenizer.Codec, body []byte) (int64, error) {
 					parts := content.Array()
 					for j := range parts {
 						part := parts[j]
+						if part.Get("type").String() == "input_image" {
+							imageParts++
+							continue
+						}
 						if text := strings.TrimSpace(part.Get("text").String()); text != "" {
 							segments = append(segments, text)
 						}
@@ -120,7 +128,22 @@ func countCodexInputTokens(enc tokenizer.Codec, body []byte) (int64, error) {
 					segments = append(segments, args)
 				}
 			case "function_call_output":
-				if out := strings.TrimSpace(item.Get("output").String()); out != "" {
+				// Release 1 (R1-K2): a structured tool output counts each
+				// input_image part at the fixed estimate and only text parts as
+				// text, the same as message content; a string output is text.
+				if output := item.Get("output"); output.IsArray() {
+					parts := output.Array()
+					for j := range parts {
+						part := parts[j]
+						if part.Get("type").String() == "input_image" {
+							imageParts++
+							continue
+						}
+						if text := strings.TrimSpace(part.Get("text").String()); text != "" {
+							segments = append(segments, text)
+						}
+					}
+				} else if out := strings.TrimSpace(output.String()); out != "" {
 					segments = append(segments, out)
 				}
 			default:
@@ -170,14 +193,19 @@ func countCodexInputTokens(enc tokenizer.Codec, body []byte) (int64, error) {
 		}
 	}
 
+	imageTokens := imageParts * codexImageTokenEstimate
 	text := strings.Join(segments, "\n")
 	if text == "" {
-		return 0, nil
+		return imageTokens, nil
 	}
 
 	count, err := enc.Count(text)
 	if err != nil {
 		return 0, err
 	}
-	return int64(count), nil
+	return int64(count) + imageTokens, nil
 }
+
+// codexImageTokenEstimate is the fixed input estimate per image part (Release 1,
+// R1-K2): OpenAI's high-detail cost of a 1024x1024 image, 85 + 4*170 tokens.
+const codexImageTokenEstimate int64 = 765

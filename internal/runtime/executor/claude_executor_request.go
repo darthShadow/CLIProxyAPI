@@ -671,6 +671,33 @@ func (claudeEntitlementError) IsCredentialScoped() bool {
 type claudeRateLimitError struct {
 	statusErr
 	credentialScoped bool
+	headers          http.Header
+}
+
+// Headers returns the filtered upstream headers the client should see.
+func (e claudeRateLimitError) Headers() http.Header {
+	if e.headers == nil {
+		return nil
+	}
+	return e.headers.Clone()
+}
+
+// claudeClientErrorHeaders keeps the upstream error headers Claude Code reads:
+// the anthropic-ratelimit family, Retry-After, request-id, and x-should-retry
+// (Release 1, R1-E2). It returns nil when none is present.
+func claudeClientErrorHeaders(headers http.Header) http.Header {
+	var out http.Header
+	for key, values := range headers {
+		lower := strings.ToLower(key)
+		if !strings.HasPrefix(lower, "anthropic-ratelimit-") && lower != "retry-after" && lower != "request-id" && lower != "x-should-retry" {
+			continue
+		}
+		if out == nil {
+			out = http.Header{}
+		}
+		out[http.CanonicalHeaderKey(key)] = append([]string(nil), values...)
+	}
+	return out
 }
 
 func (e claudeRateLimitError) IsCredentialScoped() bool {
@@ -701,15 +728,19 @@ func classifyClaudeUpstreamErrorWithCooling(statusCode int, headers http.Header,
 		retryAfter = helps.ParseClaudeRateLimitReset(headers, time.Now())
 	}
 	err := statusErr{code: statusCode, msg: string(body), retryAfter: retryAfter}
+	clientHeaders := claudeClientErrorHeaders(headers)
 	if statusCode == http.StatusTooManyRequests {
 		if !modelLevelCooling && helps.ClaudeHeadersIndicateUnifiedRateLimitRejection(headers) {
-			return claudeRateLimitError{statusErr: err, credentialScoped: true}
+			return claudeRateLimitError{statusErr: err, credentialScoped: true, headers: clientHeaders}
 		}
 		if claudeBodyIndicatesFastModeCredits(body) {
 			return claudeEntitlementError{err}
 		}
 		// Ordinary model-level Claude 429 (not a unified 5h/7d rejection)
-		return claudeRateLimitError{statusErr: err, credentialScoped: false}
+		return claudeRateLimitError{statusErr: err, credentialScoped: false, headers: clientHeaders}
+	}
+	if clientHeaders != nil {
+		return statusErrWithHeaders{statusErr: err, headers: clientHeaders}
 	}
 	return err
 }
@@ -1161,10 +1192,9 @@ func applyClaudeHeadersWithNativeProfile(
 			if countTokens {
 				baseBetas = withClaudeCountTokensOAuthBeta(baseBetas)
 			} else {
-				isSubagent := helps.IsClaudeSubagentRequest(incomingHeaders, body)
-				isProbe := helps.IsClaudeProbeOrHelperRequest(body)
-				subagent1h := isSubagent && helps.ClaudeSubagentRequests1h(incomingHeaders, body)
-				includeExtendedCacheTTL := (!isSubagent || subagent1h) && !isProbe
+				// The TTL beta goes out only when a 1-hour cache marker in the body
+				// needs it.
+				includeExtendedCacheTTL := helps.ClaudePayloadHas1hTTL(body) && !helps.IsClaudeProbeOrHelperRequest(body)
 				baseBetas = withClaudeOAuthCredentialBetas(baseBetas, includeExtendedCacheTTL)
 			}
 		}
@@ -1397,6 +1427,8 @@ func applyClaudeHeadersWithNativeProfile(
 			"X-Claude-Code-Prev-Tool-Durations",
 			"X-Claude-Code-Compaction",
 			"X-Claude-Code-Context-Compacted",
+			"X-Claude-Code-Prompt-Id",
+			"X-Cc-Compaction-Request",
 		} {
 			if val := helps.HeaderValueCaseInsensitive(incomingHeaders, hdr); val != "" {
 				r.Header.Set(hdr, val)

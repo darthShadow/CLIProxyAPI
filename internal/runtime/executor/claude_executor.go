@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -182,6 +183,25 @@ func stripTranslatedDefaultMaxTokens(from sdktranslator.Format, originalPayload,
 	return stripped
 }
 
+// claudeUnconfirmedClientBody is the local refusal returned when
+// claude-code.refuse-unconfirmed-clients is on and a request is not confirmed as
+// native Claude Code at the configured version.
+const claudeUnconfirmedClientBody = `{"type":"error","error":{"type":"invalid_request_error","message":"request refused by proxy: client is not confirmed as native Claude Code at the configured version; nothing was sent upstream"}}`
+
+// refuseUnconfirmedClaudeRequest returns a request-scoped 400 when the refusal
+// switch is on and the request is not confirmed native Claude Code whose
+// User-Agent version equals the configured baseline. The caller returns the
+// error before any upstream send.
+func refuseUnconfirmedClaudeRequest(cfg *config.Config, detection helps.ClaudeCodeRequestDetection, incomingHeaders http.Header) error {
+	if cfg == nil || !cfg.ClaudeCode.RefuseUnconfirmedClients {
+		return nil
+	}
+	if detection.Confirmed && helps.ClaudeCodeUserAgentMatchesBaseline(helps.HeaderValueCaseInsensitive(incomingHeaders, "User-Agent"), cfg) {
+		return nil
+	}
+	return claudeEntitlementError{statusErr{code: http.StatusBadRequest, msg: claudeUnconfirmedClientBody}}
+}
+
 func NewClaudeExecutor(cfg *config.Config) *ClaudeExecutor {
 	return &ClaudeExecutor{cfg: cfg, oauthToolAliases: &claudeOAuthToolAliasStore{}}
 }
@@ -355,6 +375,25 @@ func (e *ClaudeExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Aut
 		ctx = req.Context()
 	}
 	httpReq := req.WithContext(ctx)
+	// A raw request passes the same refusal as Messages and count_tokens
+	// before any credential is attached or byte is sent.
+	if e.cfg != nil && e.cfg.ClaudeCode.RefuseUnconfirmedClients {
+		var body []byte
+		if httpReq.Body != nil {
+			var errRead error
+			body, errRead = io.ReadAll(httpReq.Body)
+			_ = httpReq.Body.Close()
+			if errRead != nil {
+				return nil, fmt.Errorf("claude executor: read request body: %w", errRead)
+			}
+			httpReq.Body = io.NopCloser(bytes.NewReader(body))
+		}
+		countTokens := httpReq.URL != nil && strings.Contains(httpReq.URL.Path, "count_tokens")
+		rawHeaders, rawDetection := detectIncomingClaudeCodeRequest(ctx, httpReq.Header, body, countTokens, e.cfg)
+		if errRefuse := refuseUnconfirmedClaudeRequest(e.cfg, rawDetection, rawHeaders); errRefuse != nil {
+			return nil, errRefuse
+		}
+	}
 	if err := e.PrepareRequest(httpReq, auth); err != nil {
 		return nil, err
 	}

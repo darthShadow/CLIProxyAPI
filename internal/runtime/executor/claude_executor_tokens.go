@@ -24,6 +24,16 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 	if baseURL == "" {
 		baseURL = "https://api.anthropic.com"
 	}
+	// Refuse an unconfirmed request before either count path, so the local
+	// estimate for custom origins (W's delegate) refuses too.
+	countPayload := req.Payload
+	if len(opts.OriginalRequest) > 0 {
+		countPayload = opts.OriginalRequest
+	}
+	countHeaders, countDetection := detectIncomingClaudeCodeRequest(ctx, opts.Headers, countPayload, true, e.cfg)
+	if errRefuse := refuseUnconfirmedClaudeRequest(e.cfg, countDetection, countHeaders); errRefuse != nil {
+		return cliproxyexecutor.Response{}, errRefuse
+	}
 	// Only Anthropic's first-party origin has the measured native count_tokens
 	// contract. Every custom/third-party base URL keeps local estimation,
 	// regardless of whether the credential is OAuth or an API key.
@@ -147,6 +157,9 @@ func (e *ClaudeExecutor) countTokensUpstream(ctx context.Context, auth *cliproxy
 		originalPayload = opts.OriginalRequest
 	}
 	incomingHeaders, claudeCodeDetection := detectIncomingClaudeCodeRequest(ctx, opts.Headers, originalPayload, true, e.cfg)
+	if errRefuse := refuseUnconfirmedClaudeRequest(e.cfg, claudeCodeDetection, incomingHeaders); errRefuse != nil {
+		return cliproxyexecutor.Response{}, errRefuse
+	}
 	confirmedClaudeCode := claudeCodeDetection.Confirmed
 	claudeSessionID := ""
 	if fp.ProfileClaudeCodeCLI {
@@ -294,6 +307,9 @@ func (e *ClaudeExecutor) countTokensUpstream(ctx context.Context, auth *cliproxy
 		helps.AppendAPIResponseChunk(ctx, e.cfg, b)
 		if errClose := errBody.Close(); errClose != nil {
 			log.Errorf("response body close error: %v", errClose)
+		}
+		if claudeBillingPassthroughStatus(resp.StatusCode) {
+			return cliproxyexecutor.Response{}, newClaudeFastDirectResponseError(resp, b)
 		}
 		return cliproxyexecutor.Response{}, classifyClaudeUpstreamErrorWithCooling(resp.StatusCode, resp.Header, b, e.modelLevelCooling())
 	}

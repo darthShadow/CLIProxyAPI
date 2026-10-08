@@ -15,6 +15,7 @@ import (
 	internalcache "github.com/router-for-me/CLIProxyAPI/v8/internal/cache"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/httpwire"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/httptransport"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/proxyutil"
@@ -355,23 +356,36 @@ func newClaudeCodeRoundTripper(proxyURL string) http.RoundTripper {
 				}
 				return nil, fmt.Errorf("claude tls: split upstream address: %w", errSplit)
 			}
-			tlsConn := tls.UClient(conn, newClaudeCodeTLSConfig(host, sessionCache), tls.HelloCustom)
-			if errPreset := tlsConn.ApplyPreset(claudeCodeTLSClientHelloSpec()); errPreset != nil {
-				if errClose := tlsConn.Close(); errClose != nil {
-					log.Debugf("claude tls: close connection after preset failure: %v", errClose)
-				}
-				return nil, fmt.Errorf("claude tls: apply Claude Code ClientHello: %w", errPreset)
+			wireConn, errWrap := claudeCodeWrapConn(ctx, conn, host, sessionCache)
+			if errWrap != nil {
+				return nil, errWrap
 			}
-			if errHandshake := tlsConn.HandshakeContext(ctx); errHandshake != nil {
-				if errClose := tlsConn.Close(); errClose != nil {
-					log.Debugf("claude tls: close connection after handshake failure: %v", errClose)
-				}
-				return nil, fmt.Errorf("claude tls: handshake upstream: %w", errHandshake)
-			}
-			return httpwire.NewOrderedRequestConn(tlsConn, claudeCodeRequestHeaderOrder), nil
+			return httpwire.NewOrderedRequestConn(wireConn, claudeCodeRequestHeaderOrder), nil
 		},
 	}
 	return transport
+}
+
+// claudeCodeWrapConn performs the Claude Code TLS handshake on a dialed
+// upstream connection. Only the test-only wiregate build replaces it
+// (utls_client_wiregate.go).
+var claudeCodeWrapConn = claudeCodeTLSHandshake
+
+func claudeCodeTLSHandshake(ctx context.Context, conn net.Conn, host string, sessionCache tls.ClientSessionCache) (net.Conn, error) {
+	tlsConn := tls.UClient(conn, newClaudeCodeTLSConfig(host, sessionCache), tls.HelloCustom)
+	if errPreset := tlsConn.ApplyPreset(claudeCodeTLSClientHelloSpec()); errPreset != nil {
+		if errClose := tlsConn.Close(); errClose != nil {
+			log.Debugf("claude tls: close connection after preset failure: %v", errClose)
+		}
+		return nil, fmt.Errorf("claude tls: apply Claude Code ClientHello: %w", errPreset)
+	}
+	if errHandshake := tlsConn.HandshakeContext(ctx); errHandshake != nil {
+		if errClose := tlsConn.Close(); errClose != nil {
+			log.Debugf("claude tls: close connection after handshake failure: %v", errClose)
+		}
+		return nil, fmt.Errorf("claude tls: handshake upstream: %w", errHandshake)
+	}
+	return tlsConn, nil
 }
 
 // fallbackRoundTripper uses provider-specific TLS fingerprints for protected
@@ -424,6 +438,7 @@ func NewUtlsHTTPClient(ctx context.Context, cfg *config.Config, auth *cliproxyau
 			chrome:    chromeRT,
 			fallback:  standardTransport,
 		},
+		CheckRedirect: util.RefuseRedirect,
 	}
 	if timeout > 0 {
 		client.Timeout = timeout

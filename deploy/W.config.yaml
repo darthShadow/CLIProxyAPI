@@ -1,0 +1,111 @@
+# W: the work proxy, for the cc-switch profile work-proxy after the employer
+# check. auth-dir holds only the work Claude login file. Claude and GPT requests
+# that the work account cannot serve go to P through the two delegate keys
+# below; the work account is Claude-only. Replace each REPLACE-WITH value; the
+# delegate key must equal the W delegate key in P.config.yaml.
+host: "127.0.0.1"
+port: 8318
+auth-dir: "~/.local/share/cliproxy/W/auths"
+api-keys:
+  - "REPLACE-WITH-WORK-PROXY-KEY"
+commercial-mode: false
+logging-to-file: true
+error-logs-max-files: 10
+usage-statistics-enabled: true
+# W serves no management page and no management API (decision line 103 names
+# only P's page).
+remote-management:
+  allow-remote: false
+  secret-key: ""
+  disable-control-panel: true
+  disable-auto-update-panel: true
+passthrough-headers: true
+request-retry: 0
+max-retry-credentials: 2
+transient-error-cooldown-seconds: -1
+disable-claude-cloak-mode: true
+disable-image-generation: "chat"
+claude-code:
+  disable-cloaking-model-list: true
+  refuse-unconfirmed-clients: true
+# Same version tie as P; both files change together behind the upgrade gate.
+claude-header-defaults:
+  user-agent: "claude-cli/2.1.285 (external, cli)"
+codex:
+  refuse-exhausted-included-usage: true
+routing:
+  strategy: "round-robin"
+  session-affinity: true
+  session-affinity-ttl: "1h"
+  session-affinity-subagents: true
+  session-affinity-hold: false
+oauth-request-scoped-errors:
+  claude:
+    - {status: 408, match-regexr: ["^"], action: "stop"}
+    - {status: 429, scope: "model", match-regexr: ["^"], action: "stop"}  # a plan limit has no rule: the work account rests and the request moves to the P delegate
+    - {status: 500, match-regexr: ["^"], action: "stop"}
+    - {status: 501, match-regexr: ["^"], action: "stop"}
+    - {status: 502, match-regexr: ["^"], action: "stop"}
+    - {status: 503, match-regexr: ["^"], action: "stop"}
+    - {status: 504, match-regexr: ["^"], action: "stop"}
+    - {status: 520, match-regexr: ["^"], action: "stop"}
+    - {status: 521, match-regexr: ["^"], action: "stop"}
+    - {status: 522, match-regexr: ["^"], action: "stop"}
+    - {status: 523, match-regexr: ["^"], action: "stop"}
+    - {status: 524, match-regexr: ["^"], action: "stop"}
+    - {status: 525, match-regexr: ["^"], action: "stop"}
+    - {status: 526, match-regexr: ["^"], action: "stop"}
+    - {status: 529, match-regexr: ["^"], action: "stop"}
+claude-api-key:
+  - api-key: "REPLACE-WITH-W-DELEGATE-KEY"
+    base-url: "http://127.0.0.1:8317"
+    priority: -1
+    request-scoped-errors:  # every 429 from P returns to the client
+        - {status: 408, match-regexr: ["^"], action: "stop"}
+        - {status: 429, match-regexr: ["^"], action: "stop"}
+        - {status: 500, match-regexr: ["^"], action: "stop"}
+        - {status: 501, match-regexr: ["^"], action: "stop"}
+        - {status: 502, match-regexr: ["^"], action: "stop"}
+        - {status: 503, match-regexr: ["^"], action: "stop"}
+        - {status: 504, match-regexr: ["^"], action: "stop"}
+        - {status: 520, match-regexr: ["^"], action: "stop"}
+        - {status: 521, match-regexr: ["^"], action: "stop"}
+        - {status: 522, match-regexr: ["^"], action: "stop"}
+        - {status: 523, match-regexr: ["^"], action: "stop"}
+        - {status: 524, match-regexr: ["^"], action: "stop"}
+        - {status: 525, match-regexr: ["^"], action: "stop"}
+        - {status: 526, match-regexr: ["^"], action: "stop"}
+        - {status: 529, match-regexr: ["^"], action: "stop"}
+codex-api-key:
+  - api-key: "REPLACE-WITH-W-DELEGATE-KEY"
+    base-url: "http://127.0.0.1:8317/v1"
+    request-scoped-errors:
+      - {status: 402, match-regexr: ["^"], action: "stop"}
+      - {status: 403, match-regexr: ["^"], action: "stop"}
+      - {status: 408, match-regexr: ["^"], action: "stop"}
+      - {status: 429, match-regexr: ["^"], action: "stop"}
+      - {status: 500, match-regexr: ["^"], action: "stop"}
+      - {status: 501, match-regexr: ["^"], action: "stop"}
+      - {status: 502, match-regexr: ["^"], action: "stop"}
+      - {status: 503, match-regexr: ["^"], action: "stop"}
+      - {status: 504, match-regexr: ["^"], action: "stop"}
+      - {status: 520, match-regexr: ["^"], action: "stop"}
+      - {status: 521, match-regexr: ["^"], action: "stop"}
+      - {status: 522, match-regexr: ["^"], action: "stop"}
+      - {status: 523, match-regexr: ["^"], action: "stop"}
+      - {status: 524, match-regexr: ["^"], action: "stop"}
+      - {status: 525, match-regexr: ["^"], action: "stop"}
+      - {status: 526, match-regexr: ["^"], action: "stop"}
+      - {status: 529, match-regexr: ["^"], action: "stop"}
+payload:
+  override:
+    - models:
+        - {name: "gpt-*", protocol: "codex"}
+      params:
+        "text.verbosity": "low"
+  filter:
+    - models:
+        - {name: "gpt-*", protocol: "codex"}
+      params:
+        - "service_tier"
+        - 'tools.#(type=="image_generation")'

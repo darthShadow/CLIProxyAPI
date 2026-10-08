@@ -131,6 +131,11 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		}
 		helps.AppendAPIResponseChunk(ctx, e.cfg, b)
 		helps.LogWithRequestID(ctx).Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), b))
+		// A billing or permission failure goes back with the upstream status,
+		// headers, and body unchanged: no retry, account move, or cooldown.
+		if claudeBillingPassthroughStatus(httpResp.StatusCode) {
+			return resp, newClaudeFastDirectResponseError(httpResp, b)
+		}
 		err = newCodexStatusErrWithCooling(httpResp.StatusCode, b, e.modelLevelCooling())
 		return resp, err
 	}
@@ -309,6 +314,11 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 		b, _ := io.ReadAll(httpResp.Body)
 		helps.AppendAPIResponseChunk(ctx, e.cfg, b)
 		helps.LogWithRequestID(ctx).Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), b))
+		// A billing or permission failure goes back with the upstream status,
+		// headers, and body unchanged: no retry, account move, or cooldown.
+		if claudeBillingPassthroughStatus(httpResp.StatusCode) {
+			return resp, newClaudeFastDirectResponseError(httpResp, b)
+		}
 		err = newCodexStatusErrWithCooling(httpResp.StatusCode, b, e.modelLevelCooling())
 		return resp, err
 	}

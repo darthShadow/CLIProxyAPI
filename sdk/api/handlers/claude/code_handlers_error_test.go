@@ -113,8 +113,8 @@ func TestClaudeErrorExtractsOpenAIStyleUpstreamJSON(t *testing.T) {
 	if got.Error.Type != "invalid_request_error" {
 		t.Fatalf("error.type = %q, want invalid_request_error", got.Error.Type)
 	}
-	if got.Error.Message != "Your input exceeds the context window of this model. Please adjust your input and try again." {
-		t.Fatalf("error.message = %q", got.Error.Message)
+	if got.Error.Message != "prompt is too long: Your input exceeds the context window of this model. Please adjust your input and try again." {
+		t.Fatalf("error.message = %q, want the prompt-is-too-long prefix with the upstream text kept", got.Error.Message)
 	}
 }
 
@@ -257,8 +257,8 @@ func TestWriteClaudeErrorResponseUsesClaudeEnvelope(t *testing.T) {
 	if got := gjson.GetBytes(body, "error.type").String(); got != "invalid_request_error" {
 		t.Fatalf("error.type = %q, want invalid_request_error; body=%s", got, body)
 	}
-	if got := gjson.GetBytes(body, "error.message").String(); got != "Your input exceeds the context window of this model. Please adjust your input and try again." {
-		t.Fatalf("error.message = %q; body=%s", got, body)
+	if got := gjson.GetBytes(body, "error.message").String(); got != "prompt is too long: Your input exceeds the context window of this model. Please adjust your input and try again." {
+		t.Fatalf("error.message = %q, want the prompt-is-too-long prefix with the upstream text kept; body=%s", got, body)
 	}
 }
 

@@ -366,10 +366,50 @@ func (h *ClaudeCodeAPIHandler) forwardClaudeStream(c *gin.Context, flusher http.
 				c.Status(status)
 			}
 
-			errorBytes, _ := json.Marshal(h.toClaudeError(errMsg))
-			_, _ = fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errorBytes)
+			_, _ = c.Writer.Write(h.claudeStreamErrorFrame(errMsg))
 		},
 	})
+}
+
+// claudeStreamErrorFrame builds the SSE error frame written after a stream has
+// started. An upstream error object passes through unchanged inside the
+// Anthropic envelope: event "error", data {"type":"error","error":<object>}.
+func (h *ClaudeCodeAPIHandler) claudeStreamErrorFrame(errMsg *interfaces.ErrorMessage) []byte {
+	if upstream, ok := upstreamStreamErrorObject(errMsg); ok {
+		return []byte("event: error\ndata: {\"type\":\"error\",\"error\":" + upstream + "}\n\n")
+	}
+	errorBytes, _ := json.Marshal(h.toClaudeError(errMsg))
+	return []byte(fmt.Sprintf("event: error\ndata: %s\n\n", errorBytes))
+}
+
+// upstreamStreamErrorObject returns the upstream "error" object carried by an
+// in-stream failure, byte for byte. A ChatGPT context overflow is excluded so it
+// keeps Anthropic's "prompt is too long" text. An object that spans lines is
+// compacted, because one SSE data line cannot hold a line break.
+func upstreamStreamErrorObject(errMsg *interfaces.ErrorMessage) (string, bool) {
+	if errMsg == nil || errMsg.Error == nil {
+		return "", false
+	}
+	text := strings.TrimSpace(errMsg.Error.Error())
+	if !gjson.Valid(text) {
+		return "", false
+	}
+	object := gjson.Get(text, "error")
+	if !object.IsObject() {
+		return "", false
+	}
+	if strings.TrimSpace(object.Get("code").String()) == "context_too_large" {
+		return "", false
+	}
+	raw := object.Raw
+	if strings.ContainsAny(raw, "\r\n") {
+		var compacted bytes.Buffer
+		if errCompact := json.Compact(&compacted, []byte(raw)); errCompact != nil {
+			return "", false
+		}
+		raw = compacted.String()
+	}
+	return raw, true
 }
 
 type claudeErrorDetail struct {
@@ -468,6 +508,11 @@ func (h *ClaudeCodeAPIHandler) WriteErrorResponse(c *gin.Context, msg *interface
 	if err != nil {
 		body = []byte(`{"type":"error","error":{"type":"api_error","message":"Internal Server Error"}}`)
 	}
+	// Release 1 (R1-E2): a valid Anthropic error envelope from the upstream is
+	// written unchanged, so fields such as request_id reach the client.
+	if upstream, ok := anthropicErrorEnvelope(msg); ok {
+		body = upstream
+	}
 	appendClaudeAPIResponse(c, body)
 	if !c.Writer.Written() {
 		c.Writer.Header().Set("Content-Type", "application/json")
@@ -508,6 +553,16 @@ func claudeErrorDetailFromText(status int, errText string) (string, string) {
 					message = strings.TrimSpace(m)
 				} else if c, ok := e["code"].(string); ok && strings.TrimSpace(c) != "" {
 					message = strings.TrimSpace(c)
+				}
+				// A ChatGPT context overflow reads as Anthropic's own overflow
+				// prefix, which Claude Code handles; the upstream explanation stays
+				// after the prefix.
+				if c, ok := e["code"].(string); ok && strings.TrimSpace(c) == "context_too_large" {
+					if message == "" || message == strings.TrimSpace(c) {
+						message = "prompt is too long"
+					} else {
+						message = "prompt is too long: " + message
+					}
 				}
 			} else {
 				if t, ok := payload["type"].(string); ok && strings.TrimSpace(t) != "" && strings.TrimSpace(t) != "error" {

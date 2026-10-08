@@ -65,6 +65,9 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	}
 	originalPayload := originalPayloadSource
 	incomingHeaders, claudeCodeDetection := detectIncomingClaudeCodeRequest(ctx, opts.Headers, originalPayload, false, e.cfg)
+	if errRefuse := refuseUnconfirmedClaudeRequest(e.cfg, claudeCodeDetection, incomingHeaders); errRefuse != nil {
+		return resp, errRefuse
+	}
 	confirmedClaudeCode := claudeCodeDetection.Confirmed
 	claudeSessionID := ""
 	if fp.ProfileClaudeCodeCLI {
@@ -199,7 +202,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	// Native non-stream Haiku helper requests omit stream rather than sending
 	// false, so preserve that measured wire shape when the transport agrees.
 	streamField := gjson.GetBytes(body, "stream")
-	if !claudeCodeDetection.HelperProfile || streamField.Exists() || upstreamStream {
+	if !confirmedClaudeCode || streamField.Exists() || upstreamStream {
 		body = helps.SetBoolIfDifferent(body, "stream", upstreamStream)
 	}
 
@@ -228,7 +231,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	}
 	cchBilling := ""
 	if cchSigning {
-		if !claudeCodeDetection.HelperProfile || claudeBodyNeedsBillingFallback(bodyForUpstream) {
+		if !confirmedClaudeCode {
 			cchBilling = claudeCCHFallbackBillingHeader(ctx, e.cfg, bodyForUpstream, claudeCodeDetection.Entrypoint)
 		}
 		bodyForUpstream, err = ensureClaudeBillingHeaderCCHPlaceholder(bodyForUpstream, cchBilling)
@@ -331,7 +334,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 		if errClose := errBody.Close(); errClose != nil {
 			log.Errorf("response body close error: %v", errClose)
 		}
-		if fastRequest {
+		if fastRequest || claudeBillingPassthroughStatus(httpResp.StatusCode) {
 			return resp, newClaudeFastDirectResponseError(httpResp, b)
 		}
 		return resp, classifyClaudeUpstreamErrorWithCooling(httpResp.StatusCode, httpResp.Header, b, e.modelLevelCooling())

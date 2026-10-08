@@ -164,6 +164,122 @@ func TestConvertOpenAIChatCompletionsResponseToOpenAIResponses_ResponseCompleted
 	}
 }
 
+func TestConvertOpenAIChatCompletionsResponseToOpenAIResponses_StreamUsageAcrossChunks(t *testing.T) {
+	t.Parallel()
+
+	request := []byte(`{"model":"model","stream":true}`)
+	usageWithoutCache := `"usage":{"prompt_tokens":1000,"completion_tokens":10,"total_tokens":1010}`
+	usageWithCache := `"usage":{"prompt_tokens":1000,"completion_tokens":10,"total_tokens":1010,"prompt_tokens_details":{"cached_tokens":900}}`
+	usageWithZero := `"usage":{"prompt_tokens":1000,"completion_tokens":10,"total_tokens":1010,"prompt_tokens_details":{"cached_tokens":0}}`
+	content := `data: {"id":"chatcmpl-Rbench","object":"chat.completion.chunk","created":1773896263,"model":"model","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"},"finish_reason":null}]`
+	finish := `data: {"id":"chatcmpl-Rbench","object":"chat.completion.chunk","created":1773896263,"model":"model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]`
+	usageOnly := `data: {"id":"chatcmpl-Rbench","object":"chat.completion.chunk","created":1773896263,"model":"model","choices":[]`
+	tests := []struct {
+		name         string
+		chunks       []string
+		cachedTokens int64
+	}{
+		{
+			name:         "A",
+			chunks:       []string{content + `}`, finish + `}`, usageOnly + `,` + usageWithCache + `}`},
+			cachedTokens: 900,
+		},
+		{
+			name:         "B1",
+			chunks:       []string{content + `}`, finish + `,` + usageWithoutCache + `}`, usageOnly + `,` + usageWithCache + `}`},
+			cachedTokens: 900,
+		},
+		{
+			name:         "B2",
+			chunks:       []string{content + `,` + usageWithCache + `}`, content + `,` + usageWithoutCache + `}`, finish + `,` + usageWithoutCache + `}`},
+			cachedTokens: 900,
+		},
+		{
+			name:         "ZERO",
+			chunks:       []string{content + `}`, finish + `}`, usageOnly + `,` + usageWithZero + `}`},
+			cachedTokens: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var param any
+			var completed gjson.Result
+			completedCount := 0
+			for i, line := range append(tt.chunks, `data: [DONE]`) {
+				for _, chunk := range ConvertOpenAIChatCompletionsResponseToOpenAIResponses(context.Background(), "model", request, request, []byte(line), &param) {
+					event, data := parseOpenAIResponsesSSEEvent(t, chunk)
+					if event != "response.completed" {
+						continue
+					}
+					if i != len(tt.chunks) {
+						t.Fatalf("response.completed input index = %d, want terminal [DONE] index %d", i, len(tt.chunks))
+					}
+					completedCount++
+					completed = data
+				}
+			}
+			if completedCount != 1 {
+				t.Fatalf("response.completed count = %d, want 1", completedCount)
+			}
+			for field, want := range map[string]int64{
+				"input_tokens":                       1000,
+				"output_tokens":                      10,
+				"total_tokens":                       1010,
+				"input_tokens_details.cached_tokens": tt.cachedTokens,
+			} {
+				got := completed.Get("response.usage." + field)
+				if !got.Exists() || got.Int() != want {
+					t.Errorf("response.usage.%s = %s, want %d (usage=%s)", field, got.Raw, want, completed.Get("response.usage").Raw)
+				}
+			}
+		})
+	}
+}
+
+func TestConvertOpenAIChatCompletionsResponseToOpenAIResponses_SharedStateDoesNotCarryUsageToSecondResponse(t *testing.T) {
+	t.Parallel()
+
+	request := []byte(`{"model":"model","stream":true}`)
+	var param any
+	firstCompleted := 0
+	for _, line := range []string{
+		`data: {"id":"first","object":"chat.completion.chunk","model":"model","choices":[{"index":0,"delta":{"role":"assistant","content":"first"},"finish_reason":null}]}`,
+		`data: {"id":"first","object":"chat.completion.chunk","model":"model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1000,"completion_tokens":10,"total_tokens":1010,"prompt_tokens_details":{"cached_tokens":900}}}`,
+		`data: [DONE]`,
+	} {
+		for _, chunk := range ConvertOpenAIChatCompletionsResponseToOpenAIResponses(context.Background(), "model", request, request, []byte(line), &param) {
+			event, data := parseOpenAIResponsesSSEEvent(t, chunk)
+			if event != "response.completed" {
+				continue
+			}
+			firstCompleted++
+			for field, want := range map[string]int64{
+				"input_tokens": 1000, "output_tokens": 10, "total_tokens": 1010, "input_tokens_details.cached_tokens": 900,
+			} {
+				got := data.Get("response.usage." + field)
+				if !got.Exists() || got.Int() != want {
+					t.Errorf("first response.usage.%s = %s, want %d", field, got.Raw, want)
+				}
+			}
+		}
+	}
+	if firstCompleted != 1 {
+		t.Fatalf("first response.completed count = %d, want 1", firstCompleted)
+	}
+
+	var secondEvents int
+	for _, line := range []string{
+		`data: {"id":"second","object":"chat.completion.chunk","model":"model","choices":[{"index":0,"delta":{"role":"assistant","content":"second"},"finish_reason":null}]}`,
+		`data: {"id":"second","object":"chat.completion.chunk","model":"model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		`data: [DONE]`,
+	} {
+		secondEvents += len(ConvertOpenAIChatCompletionsResponseToOpenAIResponses(context.Background(), "model", request, request, []byte(line), &param))
+	}
+	if secondEvents != 0 {
+		t.Errorf("completed shared state emitted %d events for a second response, want 0", secondEvents)
+	}
+}
+
 func TestConvertOpenAIChatCompletionsResponseToOpenAIResponses_FinalizesOpenMessageAtStreamEnd(t *testing.T) {
 	t.Parallel()
 

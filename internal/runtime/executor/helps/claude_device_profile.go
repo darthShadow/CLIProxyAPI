@@ -221,6 +221,14 @@ func plausibleClaudeCLIVersion(candidate, baseline claudeCLIVersion) bool {
 		candidate.patch >= baseline.patch
 }
 
+// ClaudeCodeUserAgentMatchesBaseline reports whether userAgent names exactly the
+// Claude Code version of the configured baseline user agent.
+func ClaudeCodeUserAgentMatchesBaseline(userAgent string, cfg *config.Config) bool {
+	candidate, okCandidate := parseClaudeCLIVersion(userAgent)
+	baseline := defaultClaudeDeviceProfile(cfg)
+	return okCandidate && baseline.hasVersion && candidate.Compare(baseline.version) == 0
+}
+
 func meetsClaudeDeviceProfileBaseline(candidate, baseline ClaudeDeviceProfile) bool {
 	if candidate.UserAgent == "" || !candidate.hasVersion {
 		return false
@@ -619,8 +627,8 @@ func ApplyClaudeLegacyDeviceHeaders(r *http.Request, ginHeaders http.Header, cfg
 	}
 
 	if confirmedClaudeCode {
-		miscEnsure("X-Stainless-Runtime-Version", profile.RuntimeVersion, func(value string) bool { return value == profile.RuntimeVersion })
-		miscEnsure("X-Stainless-Package-Version", profile.PackageVersion, func(value string) bool { return value == profile.PackageVersion })
+		miscEnsure("X-Stainless-Runtime-Version", profile.RuntimeVersion, claudeRuntimeVersionPattern.MatchString)
+		miscEnsure("X-Stainless-Package-Version", profile.PackageVersion, claudePackageVersionPattern.MatchString)
 		miscEnsure("X-Stainless-Os", mapStainlessOS(), nil)
 		miscEnsure("X-Stainless-Arch", mapStainlessArch(), nil)
 		if clientUA := strings.TrimSpace(ginHeaders.Get("User-Agent")); plausibleClaudeCodeUserAgent(clientUA, cfg) {

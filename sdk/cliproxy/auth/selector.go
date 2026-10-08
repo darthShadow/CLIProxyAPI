@@ -915,6 +915,9 @@ type SessionAffinitySelector struct {
 	matcher           *cliproxysession.MerklePrefixMatcher
 	subagentAffinity  bool
 	rebindOnQuotaOnly bool
+	// hold keeps a bound session on its credential; see SessionAffinityConfig.Hold.
+	hold   bool
+	bindMu sync.Mutex
 }
 
 const (
@@ -1046,6 +1049,11 @@ type SessionAffinityConfig struct {
 	TTL              time.Duration
 	SubagentAffinity *bool
 	RebindOn         string
+	// Hold keeps a bound session on its credential. The binding key names the
+	// credential provider instead of the model, the first binding of a session
+	// wins under a lock, and a session whose credential is unavailable gets an
+	// error instead of a new credential.
+	Hold bool
 }
 
 // NewSessionAffinitySelector creates a new session-aware selector.
@@ -1075,7 +1083,28 @@ func NewSessionAffinitySelectorWithConfig(cfg SessionAffinityConfig) *SessionAff
 		matcher:           cliproxysession.NewMerklePrefixMatcher(cfg.TTL),
 		subagentAffinity:  subagentAffinity,
 		rebindOnQuotaOnly: rebindOnQuotaOnly,
+		hold:              cfg.Hold,
 	}
+}
+
+// heldSessionScope returns the binding scope used in hold mode: the one executor
+// provider shared by every candidate, or "" when the candidates span providers.
+func heldSessionScope(auths []*Auth) string {
+	scope := ""
+	for _, candidate := range auths {
+		key := executorKeyFromAuth(candidate)
+		if scope == "" {
+			scope = key
+			continue
+		}
+		if key != scope {
+			return ""
+		}
+	}
+	if scope == "" {
+		return ""
+	}
+	return "provider:" + scope
 }
 
 // Trees returns a backward-compatible in-memory session tree store.
@@ -1163,6 +1192,13 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 	fallbackAuths := highestPriorityAuths(available)
 
 	modelKey := canonicalModelKey(model)
+	if s.hold {
+		if scope := heldSessionScope(auths); scope != "" {
+			modelKey = scope
+		}
+		s.bindMu.Lock()
+		defer s.bindMu.Unlock()
+	}
 	cacheKey := provider + "::" + primaryID + "::" + modelKey
 	isFork := false
 	if opts.Metadata != nil {
@@ -1191,6 +1227,9 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 				return auth, nil
 			}
 		}
+		if s.hold {
+			return nil, errHeldSessionUnavailable(cachedAuthID)
+		}
 		// Cached auth not available, reselect via fallback selector for even distribution
 		auth, err := s.fallback.Pick(ctx, provider, model, opts, fallbackAuths)
 		if err != nil {
@@ -1211,6 +1250,9 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 
 	if fallbackKey != "" {
 		if cachedAuthID, ok := s.cache.Get(fallbackKey); ok {
+			if s.hold && (!isSubagent || s.subagentAffinity) && !authListContains(available, cachedAuthID) {
+				return nil, errHeldSessionUnavailable(cachedAuthID)
+			}
 			for _, auth := range available {
 				if auth.ID == cachedAuthID {
 					if !isSubagent || s.subagentAffinity {
@@ -1253,6 +1295,15 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 		entry.Infof("session-affinity: cache miss, new binding | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
 	}
 	return auth, nil
+}
+
+func authListContains(auths []*Auth, authID string) bool {
+	for _, auth := range auths {
+		if auth != nil && auth.ID == authID {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *SessionAffinitySelector) pickLCP(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth, entry *log.Entry) (*Auth, bool, error) {
@@ -1710,6 +1761,11 @@ func (s *SessionAffinitySelector) OnResult(res Result) {
 		fallbackID = cliproxysession.BoundSessionIdentity(fallbackID)
 	}
 
+	if s.hold {
+		if scope := strings.TrimSpace(res.Provider); scope != "" {
+			nsModel = "provider:" + scope
+		}
+	}
 	cacheKey := ns + "::" + primaryID + "::" + nsModel
 	var fallbackKey string
 	if fallbackID != "" && fallbackID != primaryID && !isSubagentSession(primaryID, fallbackID) {
@@ -1723,6 +1779,10 @@ func (s *SessionAffinitySelector) OnResult(res Result) {
 		return
 	}
 
+	if s.hold {
+		// A held session keeps its binding through failures.
+		return
+	}
 	s.cache.CompareAndDelete(cacheKey, res.AuthID)
 	if fallbackKey != "" {
 		s.cache.CompareAndDelete(fallbackKey, res.AuthID)
