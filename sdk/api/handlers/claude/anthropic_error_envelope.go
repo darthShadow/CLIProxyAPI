@@ -1,8 +1,6 @@
 package claude
 
 import (
-	"bytes"
-	"encoding/json"
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
@@ -11,7 +9,8 @@ import (
 
 // anthropicErrorEnvelope returns the upstream error text when it is a valid
 // Anthropic error envelope: top-level "type":"error" and an "error" object with
-// string "type" and "message". Proxy-built errors never have that shape.
+// string "type" and "message". A proxy refusal built in that shape, such as
+// the unconfirmed-client refusal, is written unchanged too.
 func anthropicErrorEnvelope(msg *interfaces.ErrorMessage) ([]byte, bool) {
 	if msg == nil || msg.Error == nil {
 		return nil, false
@@ -27,9 +26,5 @@ func anthropicErrorEnvelope(msg *interfaces.ErrorMessage) ([]byte, bool) {
 	if root.Get("error.type").Type != gjson.String || root.Get("error.message").Type != gjson.String {
 		return nil, false
 	}
-	var compact bytes.Buffer
-	if errCompact := json.Compact(&compact, []byte(text)); errCompact != nil {
-		return nil, false
-	}
-	return compact.Bytes(), true
+	return []byte(text), true
 }

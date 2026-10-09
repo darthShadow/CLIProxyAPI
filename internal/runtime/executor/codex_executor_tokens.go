@@ -66,7 +66,7 @@ func tokenizerForCodexModel(model string) (tokenizer.Codec, error) {
 	case sanitized == "":
 		return tokenizer.Get(tokenizer.Cl100kBase)
 	case strings.HasPrefix(sanitized, "gpt-6"):
-		// Release 1 (R1-K2): the GPT-6 line uses o200k, like gpt-5.
+		// The GPT-6 line uses o200k, like gpt-5.
 		return tokenizer.Get(tokenizer.O200kBase)
 	case strings.HasPrefix(sanitized, "gpt-5"):
 		return tokenizer.ForModel(tokenizer.GPT5)
@@ -128,7 +128,7 @@ func countCodexInputTokens(enc tokenizer.Codec, body []byte) (int64, error) {
 					segments = append(segments, args)
 				}
 			case "function_call_output":
-				// Release 1 (R1-K2): a structured tool output counts each
+				// A structured tool output counts each
 				// input_image part at the fixed estimate and only text parts as
 				// text, the same as message content; a string output is text.
 				if output := item.Get("output"); output.IsArray() {
@@ -206,6 +206,6 @@ func countCodexInputTokens(enc tokenizer.Codec, body []byte) (int64, error) {
 	return int64(count) + imageTokens, nil
 }
 
-// codexImageTokenEstimate is the fixed input estimate per image part (Release 1,
-// R1-K2): OpenAI's high-detail cost of a 1024x1024 image, 85 + 4*170 tokens.
+// codexImageTokenEstimate is the fixed input estimate per image part:
+// OpenAI's high-detail cost of a 1024x1024 image, 85 + 4*170 tokens.
 const codexImageTokenEstimate int64 = 765

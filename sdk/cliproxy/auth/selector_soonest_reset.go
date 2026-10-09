@@ -2,8 +2,6 @@ package auth
 
 import (
 	"context"
-	"strconv"
-	"strings"
 	"time"
 
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
@@ -53,29 +51,13 @@ func (s *SoonestResetSelector) Pick(ctx context.Context, provider, model string,
 // "x-codex-secondary-reset-at" (Unix seconds), or Codex
 // "x-codex-secondary-reset-after-seconds" from the snapshot time.
 func weeklyResetAt(auth *Auth, now time.Time) (time.Time, bool) {
-	signals := auth.Quota.Signals
-	if len(signals) == 0 {
-		return time.Time{}, false
-	}
 	for _, name := range []string{"Anthropic-Ratelimit-Unified-7d-Reset", "X-Codex-Secondary-Reset-At"} {
-		if seconds, ok := positiveSignalInt(signals[name]); ok {
-			if at := time.Unix(seconds, 0); at.After(now) {
-				return at, true
-			}
-		}
-	}
-	if seconds, ok := positiveSignalInt(signals["X-Codex-Secondary-Reset-After-Seconds"]); ok && !auth.Quota.ObservedAt.IsZero() {
-		if at := auth.Quota.ObservedAt.Add(time.Duration(seconds) * time.Second); at.After(now) {
+		if at := auth.Quota.SignalUnixTime(name); at.After(now) {
 			return at, true
 		}
 	}
-	return time.Time{}, false
-}
-
-func positiveSignalInt(value string) (int64, bool) {
-	parsed, errParse := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
-	if errParse != nil || parsed <= 0 {
-		return 0, false
+	if at := auth.Quota.SignalResetAfter("X-Codex-Secondary-Reset-After-Seconds"); at.After(now) {
+		return at, true
 	}
-	return parsed, true
+	return time.Time{}, false
 }

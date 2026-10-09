@@ -60,7 +60,7 @@ func isClaudeOAuthScope403(err error) bool {
 	if err == nil {
 		return false
 	}
-	// Release 1 (R1-P1): only an HTTP 403 from the profile endpoint itself is a
+	// Only an HTTP 403 from the profile endpoint itself is a
 	// scope error; transport errors and other texts persist nothing.
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "fetch claude oauth profile failed with status 403")

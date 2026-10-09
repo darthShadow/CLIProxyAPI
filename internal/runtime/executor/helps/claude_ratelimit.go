@@ -192,7 +192,7 @@ func parseClaudeRateLimitResetWithFuzz(headers http.Header, now time.Time, minFu
 		}
 	}
 
-	// Release 1 (R1-Q1): a rejected window's own reset decides the rest; the
+	// A rejected window's own reset decides the rest; the
 	// unified reset applies only when no rejected window carries a future reset.
 	windowResetFound := false
 	for _, window := range []struct {

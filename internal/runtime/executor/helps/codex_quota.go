@@ -2,7 +2,6 @@ package helps
 
 import (
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -364,8 +363,8 @@ func validCodexQuotaEventText(value string) bool {
 // exhausted window carries no reset time.
 func CodexIncludedUsageExhausted(quota cliproxyauth.QuotaState, now time.Time) (until time.Time, exhausted bool) {
 	for _, window := range []string{"Primary", "Secondary"} {
-		used, errUsed := strconv.ParseFloat(strings.TrimSpace(quota.Signals["X-Codex-"+window+"-Used-Percent"]), 64)
-		if errUsed != nil || used < 100 {
+		used, ok := quota.SignalPercent("X-Codex-" + window + "-Used-Percent")
+		if !ok || used < 100 {
 			continue
 		}
 		reset := codexQuotaWindowReset(quota, window)
@@ -381,15 +380,8 @@ func CodexIncludedUsageExhausted(quota cliproxyauth.QuotaState, now time.Time) (
 }
 
 func codexQuotaWindowReset(quota cliproxyauth.QuotaState, window string) time.Time {
-	if raw := strings.TrimSpace(quota.Signals["X-Codex-"+window+"-Reset-At"]); raw != "" {
-		if seconds, errParse := strconv.ParseInt(raw, 10, 64); errParse == nil && seconds > 0 {
-			return time.Unix(seconds, 0)
-		}
+	if at := quota.SignalUnixTime("X-Codex-" + window + "-Reset-At"); !at.IsZero() {
+		return at
 	}
-	if raw := strings.TrimSpace(quota.Signals["X-Codex-"+window+"-Reset-After-Seconds"]); raw != "" && !quota.ObservedAt.IsZero() {
-		if seconds, errParse := strconv.ParseInt(raw, 10, 64); errParse == nil && seconds >= 0 {
-			return quota.ObservedAt.Add(time.Duration(seconds) * time.Second)
-		}
-	}
-	return time.Time{}
+	return quota.SignalResetAfter("X-Codex-" + window + "-Reset-After-Seconds")
 }

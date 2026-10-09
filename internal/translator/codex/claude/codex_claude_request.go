@@ -369,7 +369,7 @@ func convertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 					tool, _ = sjson.DeleteBytes(tool, path)
 				}
 			}
-			// Release 1 (R1-T3): a Codex function tool carries only function
+			// A Codex function tool carries only function
 			// fields; server-tool fields such as max_uses are dropped. The tool
 			// is rebuilt from the allowed top-level keys, matched as literal
 			// names, because an sjson path reads '.', ':', '*', and '?' in a

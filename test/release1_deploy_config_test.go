@@ -1,12 +1,15 @@
 package test
 
 import (
+	"regexp"
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 )
 
-const release1ClaudeCodeUA = "claude-cli/2.1.285 (external, cli)"
+// release1ClaudeCodeUAPattern is the shape of the pinned Claude Code
+// User-Agent. deploy/P.config.yaml holds the only version value; W must equal it.
+var release1ClaudeCodeUAPattern = regexp.MustCompile(`^claude-cli/[0-9]+\.[0-9]+\.[0-9]+ \(external, cli\)$`)
 
 func release1StopStatuses(rules []config.RequestScopedErrorRule) map[int]bool {
 	statuses := make(map[int]bool, len(rules))
@@ -16,6 +19,15 @@ func release1StopStatuses(rules []config.RequestScopedErrorRule) map[int]bool {
 		}
 	}
 	return statuses
+}
+
+// release1StatusList returns the statuses of a stop set, to compare W with P.
+func release1StatusList(statuses map[int]bool) []int {
+	list := make([]int, 0, len(statuses))
+	for status := range statuses {
+		list = append(list, status)
+	}
+	return list
 }
 
 func release1RequireStatuses(t *testing.T, name string, got map[int]bool, want []int) {
@@ -68,10 +80,10 @@ func release1RequireSharedPolicy(t *testing.T, cfg *config.Config) {
 	if !cfg.DisableClaudeCloakMode || !cfg.ClaudeCode.RefuseUnconfirmedClients || !cfg.ClaudeCode.DisableCloakingModelList {
 		t.Fatalf("cloak policy = disable %v, refuse %v, model list %v; want all true", cfg.DisableClaudeCloakMode, cfg.ClaudeCode.RefuseUnconfirmedClients, cfg.ClaudeCode.DisableCloakingModelList)
 	}
-	if cfg.ClaudeHeaderDefaults.UserAgent != release1ClaudeCodeUA || cfg.ClaudeHeaderDefaults.StabilizeDeviceProfile != nil {
-		t.Fatalf("claude-header-defaults = %+v, want only user-agent %q", cfg.ClaudeHeaderDefaults, release1ClaudeCodeUA)
+	if !release1ClaudeCodeUAPattern.MatchString(cfg.ClaudeHeaderDefaults.UserAgent) || cfg.ClaudeHeaderDefaults.StabilizeDeviceProfile != nil {
+		t.Fatalf("claude-header-defaults = %+v, want only a user-agent matching %s", cfg.ClaudeHeaderDefaults, release1ClaudeCodeUAPattern)
 	}
-	if scoped := cfg.ForAPIKey(); scoped.ClaudeHeaderDefaults.UserAgent != release1ClaudeCodeUA || !scoped.ClaudeCode.RefuseUnconfirmedClients {
+	if scoped := cfg.ForAPIKey(); scoped.ClaudeHeaderDefaults.UserAgent != cfg.ClaudeHeaderDefaults.UserAgent || !scoped.ClaudeCode.RefuseUnconfirmedClients {
 		t.Fatalf("API-key view lost the version tuple or refusal switch: %+v", scoped.ClaudeHeaderDefaults)
 	}
 	if !cfg.Codex.RefuseExhaustedIncludedUsage {
@@ -129,7 +141,16 @@ func TestRelease1WorkProxyConfig(t *testing.T) {
 	if errLoad != nil {
 		t.Fatalf("LoadConfig(W) error = %v", errLoad)
 	}
+	p, errLoadP := config.LoadConfig("../deploy/P.config.yaml")
+	if errLoadP != nil {
+		t.Fatalf("LoadConfig(P) error = %v", errLoadP)
+	}
 	release1RequireSharedPolicy(t, cfg)
+	if cfg.ClaudeHeaderDefaults.UserAgent != p.ClaudeHeaderDefaults.UserAgent {
+		t.Fatalf("W user-agent %q, want P's %q (P holds the only version value)", cfg.ClaudeHeaderDefaults.UserAgent, p.ClaudeHeaderDefaults.UserAgent)
+	}
+	pClaudeStops := release1StatusList(release1StopStatuses(p.OAuthRequestScopedErrors["claude"]))
+	pCodexStops := release1StatusList(release1StopStatuses(p.OAuthRequestScopedErrors["codex"]))
 	if !cfg.RemoteManagement.DisableControlPanel {
 		t.Fatal("W disable-control-panel = false, want no management page on W")
 	}
@@ -145,9 +166,9 @@ func TestRelease1WorkProxyConfig(t *testing.T) {
 	if cfg.ClaudeKey[0].APIKey != cfg.CodexKey[0].APIKey {
 		t.Fatal("W delegate keys differ; both must equal the W delegate key in P")
 	}
-	release1RequireStatuses(t, "W claude", release1StopStatuses(cfg.OAuthRequestScopedErrors["claude"]), release1ClaudeStops)
-	release1RequireStatuses(t, "W claude delegate", release1StopStatuses(cfg.ClaudeKey[0].RequestScopedErrors), release1ClaudeStops)
-	release1RequireStatuses(t, "W codex delegate", release1StopStatuses(cfg.CodexKey[0].RequestScopedErrors), release1CodexStops)
+	release1RequireStatuses(t, "W claude", release1StopStatuses(cfg.OAuthRequestScopedErrors["claude"]), pClaudeStops)
+	release1RequireStatuses(t, "W claude delegate", release1StopStatuses(cfg.ClaudeKey[0].RequestScopedErrors), pClaudeStops)
+	release1RequireStatuses(t, "W codex delegate", release1StopStatuses(cfg.CodexKey[0].RequestScopedErrors), pCodexStops)
 	release1Require429Rows(t, "W claude", cfg.OAuthRequestScopedErrors["claude"], "")
 	for _, rule := range cfg.ClaudeKey[0].RequestScopedErrors {
 		if rule.Status == 429 && (rule.Scope != "" || rule.Action != "stop") {

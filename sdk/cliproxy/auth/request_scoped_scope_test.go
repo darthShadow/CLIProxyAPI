@@ -92,79 +92,79 @@ func (*stopStatusExecutor) HttpRequest(context.Context, *Auth, *http.Request) (*
 	return nil, errors.New("unexpected HttpRequest")
 }
 
-// release1StopStatuses mirrors P's request-scoped stop lists (deploy/P.config.yaml,
-// spec "Configs"): every listed status except 429, whose split has its own test.
-func release1StopStatuses(provider string) []int {
-	statuses := []int{408, 500, 501, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 529}
-	if provider == "codex" {
-		statuses = append(statuses, 402, 403)
+// personalProxyStopRules loads P's request-scoped rules and the statuses of
+// its unscoped stop rules per provider (429 has a scoped split with its own
+// test).
+func personalProxyStopRules(t *testing.T) (map[string][]internalconfig.RequestScopedErrorRule, map[string][]int) {
+	t.Helper()
+	cfg, errLoad := internalconfig.LoadConfig("../../../deploy/P.config.yaml")
+	if errLoad != nil {
+		t.Fatalf("LoadConfig(P) error = %v", errLoad)
 	}
-	return statuses
-}
-
-func release1StopConfig() *internalconfig.Config {
-	rules := map[string][]internalconfig.RequestScopedErrorRule{}
+	statuses := map[string][]int{}
 	for _, provider := range []string{"claude", "codex"} {
-		for _, status := range release1StopStatuses(provider) {
-			rules[provider] = append(rules[provider], internalconfig.RequestScopedErrorRule{Status: status, MatchRegexr: []string{"^"}, Action: RequestScopedActionStop})
+		for _, rule := range cfg.OAuthRequestScopedErrors[provider] {
+			if rule.Action == RequestScopedActionStop && rule.Scope == "" {
+				statuses[provider] = append(statuses[provider], rule.Status)
+			}
+		}
+		if len(statuses[provider]) == 0 {
+			t.Fatalf("P has no unscoped %s stop rules", provider)
 		}
 	}
-	return &internalconfig.Config{OAuthRequestScopedErrors: rules}
+	return cfg.OAuthRequestScopedErrors, statuses
 }
 
-// Recovered row 97: each stop status of P's lists returns to the client after
-// one attempt, on the per-attempt lookup.
-func TestRelease1RequestScopedStopEachStatusOnBothBranches(t *testing.T) {
+// Recovered row 97: each unscoped stop status in P's lists returns to the
+// client after one attempt, on the per-attempt lookup.
+func TestRelease1RequestScopedStopEachStatus(t *testing.T) {
+	rules, statuses := personalProxyStopRules(t)
 	for _, provider := range []string{"claude", "codex"} {
-		for _, status := range release1StopStatuses(provider) {
-			for _, branch := range []string{"per-attempt"} {
-				t.Run(fmt.Sprintf("%s/%d/%s", provider, status, branch), func(t *testing.T) {
-					ctx := context.Background()
-					model := fmt.Sprintf("release1-stop-%s-%d-%s", provider, status, branch)
-					authID := model + "-auth"
-					executor := &stopStatusExecutor{provider: provider, status: status}
-					manager := NewManager(nil, &FillFirstSelector{}, nil)
-					manager.SetRetryConfig(0, 0, 0)
-					manager.RegisterExecutor(executor)
-					if branch == "per-attempt" {
-						manager.runtimeConfig.Store(release1StopConfig())
+		for _, status := range statuses[provider] {
+			t.Run(fmt.Sprintf("%s/%d", provider, status), func(t *testing.T) {
+				ctx := context.Background()
+				model := fmt.Sprintf("release1-stop-%s-%d", provider, status)
+				authID := model + "-auth"
+				executor := &stopStatusExecutor{provider: provider, status: status}
+				manager := NewManager(nil, &FillFirstSelector{}, nil)
+				manager.SetRetryConfig(0, 0, 0)
+				manager.RegisterExecutor(executor)
+				manager.runtimeConfig.Store(&internalconfig.Config{OAuthRequestScopedErrors: rules})
+				registry.GetGlobalRegistry().RegisterClient(authID, provider, []*registry.ModelInfo{{ID: model}})
+				t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient(authID) })
+				if _, errRegister := manager.Register(ctx, &Auth{ID: authID, Provider: provider, Attributes: map[string]string{AttributeAuthKind: AuthKindOAuth}}); errRegister != nil {
+					t.Fatalf("register: %v", errRegister)
+				}
+				secondAuthID := model + "-backup"
+				executor.secondAuthID = secondAuthID
+				registry.GetGlobalRegistry().RegisterClient(secondAuthID, provider, []*registry.ModelInfo{{ID: model}})
+				t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient(secondAuthID) })
+				if _, errRegister := manager.Register(ctx, &Auth{ID: secondAuthID, Provider: provider, Attributes: map[string]string{AttributeAuthKind: AuthKindOAuth}}); errRegister != nil {
+					t.Fatalf("register second account: %v", errRegister)
+				}
+				_, errExecute := manager.Execute(ctx, []string{provider}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{})
+				if got := executor.secondCalls.Load(); got != 0 {
+					t.Fatalf("second account calls = %d, want 0 (no move to another account)", got)
+				}
+				if got := executor.calls.Load(); got != 1 {
+					t.Fatalf("attempts = %d, want 1", got)
+				}
+				account, ok := manager.GetByID(authID)
+				if !ok || account.ID != authID {
+					t.Fatalf("account = %v, found = %v, want bound account %q", account, ok, authID)
+				}
+				if !account.NextRetryAfter.IsZero() || account.Quota.Exceeded || !account.Quota.NextRecoverAt.IsZero() {
+					t.Fatalf("account cooldown = retry %v, quota %+v, want no cooldown", account.NextRetryAfter, account.Quota)
+				}
+				for modelID, state := range account.ModelStates {
+					if state != nil && (!state.NextRetryAfter.IsZero() || state.Quota.Exceeded || !state.Quota.NextRecoverAt.IsZero()) {
+						t.Fatalf("model %q cooldown = retry %v, quota %+v, want no cooldown", modelID, state.NextRetryAfter, state.Quota)
 					}
-					registry.GetGlobalRegistry().RegisterClient(authID, provider, []*registry.ModelInfo{{ID: model}})
-					t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient(authID) })
-					if _, errRegister := manager.Register(ctx, &Auth{ID: authID, Provider: provider, Attributes: map[string]string{AttributeAuthKind: AuthKindOAuth}}); errRegister != nil {
-						t.Fatalf("register: %v", errRegister)
-					}
-					secondAuthID := model + "-backup"
-					executor.secondAuthID = secondAuthID
-					registry.GetGlobalRegistry().RegisterClient(secondAuthID, provider, []*registry.ModelInfo{{ID: model}})
-					t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient(secondAuthID) })
-					if _, errRegister := manager.Register(ctx, &Auth{ID: secondAuthID, Provider: provider, Attributes: map[string]string{AttributeAuthKind: AuthKindOAuth}}); errRegister != nil {
-						t.Fatalf("register second account: %v", errRegister)
-					}
-					_, errExecute := manager.Execute(ctx, []string{provider}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{})
-					if got := executor.secondCalls.Load(); got != 0 {
-						t.Fatalf("second account calls = %d, want 0 (no move to another account)", got)
-					}
-					if got := executor.calls.Load(); got != 1 {
-						t.Fatalf("attempts = %d, want 1", got)
-					}
-					account, ok := manager.GetByID(authID)
-					if !ok || account.ID != authID {
-						t.Fatalf("account = %v, found = %v, want bound account %q", account, ok, authID)
-					}
-					if !account.NextRetryAfter.IsZero() || account.Quota.Exceeded || !account.Quota.NextRecoverAt.IsZero() {
-						t.Fatalf("account cooldown = retry %v, quota %+v, want no cooldown", account.NextRetryAfter, account.Quota)
-					}
-					for modelID, state := range account.ModelStates {
-						if state != nil && (!state.NextRetryAfter.IsZero() || state.Quota.Exceeded || !state.Quota.NextRecoverAt.IsZero()) {
-							t.Fatalf("model %q cooldown = retry %v, quota %+v, want no cooldown", modelID, state.NextRetryAfter, state.Quota)
-						}
-					}
-					if got := statusCodeFromError(errExecute); got != status {
-						t.Fatalf("status = %d, want %d", got, status)
-					}
-				})
-			}
+				}
+				if got := statusCodeFromError(errExecute); got != status {
+					t.Fatalf("status = %d, want %d", got, status)
+				}
+			})
 		}
 	}
 }

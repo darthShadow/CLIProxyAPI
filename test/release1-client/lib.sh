@@ -12,7 +12,7 @@ PIDS=()
 
 fixture_init() {
 	local name="$1" base="$2"
-	ROOT="$(mktemp -d "/tmp/claude-501/r1-client-$name.XXXXXX")"
+	ROOT="$(mktemp -d "${FIXTURE_TMP:-/tmp/claude-501}/r1-client-$name.XXXXXX")"
 	DUMMY_PORT="$base" CPA_PORT=$((base + 1)) RELAY_PORT=$((base + 2))
 	mkdir -p "$ROOT/home" "$ROOT/config" "$ROOT/auths"
 	# A new CLAUDE_CONFIG_DIR maps to a Keychain item that does not exist.
@@ -23,8 +23,12 @@ fixture_init() {
 JSON
 	# The proxy overlay as cc-switch generates it from proxy-settings.json.
 	cat >"$ROOT/overlay.json" <<JSON
-{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:$RELAY_PORT","ANTHROPIC_AUTH_TOKEN":"fixture-proxy-key","CLAUDE_CODE_PROMPT_CACHE_TTL":"1h","CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL":"5m","ENABLE_TOOL_SEARCH":"auto","CLAUDE_CODE_GATEWAY_HINT_HEADERS":"1","CLAUDE_CODE_MAX_CONTEXT_TOKENS":"272000","DISABLE_AUTO_COMPACT":"0"},"autoCompactEnabled":true}
+{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:$RELAY_PORT","ANTHROPIC_AUTH_TOKEN":"fixture-proxy-key","CLAUDE_CODE_PROMPT_CACHE_TTL":"1h","CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL":"5m","ENABLE_TOOL_SEARCH":"auto","CLAUDE_CODE_GATEWAY_HINT_HEADERS":"1","CLAUDE_CODE_MAX_CONTEXT_TOKENS":"268000","DISABLE_AUTO_COMPACT":"0"},"autoCompactEnabled":true}
 JSON
+	# The scratch proxy admits exactly the version of the binary under test.
+	CLAUDE_VERSION="$(env -i PATH="$PATH" HOME="$ROOT/home" CLAUDE_CONFIG_DIR="$ROOT/config" "$CLAUDE_BIN" --version | awk '{print $1}')"
+	[[ "$CLAUDE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "STOP: no version from $CLAUDE_BIN --version"; exit 2; }
+	CLAUDE_UA="claude-cli/$CLAUDE_VERSION (external, cli)"
 }
 
 fixture_stop() {
@@ -36,6 +40,10 @@ start_stack() {
 	local mode="${1:-ok}" extra_yaml="${2:-}"
 	FIXTURE_MODE="$mode" python3 "$FIXTURE_DIR/dummy_upstream.py" "$ROOT/upstream.jsonl" "$DUMMY_PORT" &
 	PIDS+=("$!")
+	local management_yaml=$'remote-management:\n  disable-auto-update-panel: true'
+	if [[ "$extra_yaml" == *remote-management:* ]]; then
+		management_yaml=""
+	fi
 	cat >"$ROOT/cpa.yaml" <<YAML
 host: "127.0.0.1"
 port: $CPA_PORT
@@ -50,13 +58,14 @@ claude-code:
   disable-cloaking-model-list: true
   refuse-unconfirmed-clients: true
 claude-header-defaults:
-  user-agent: "claude-cli/2.1.285 (external, cli)"
+  user-agent: "$CLAUDE_UA"
 claude-api-key:
   - api-key: "fixture-upstream-key"
     base-url: "http://127.0.0.1:$DUMMY_PORT"
 codex-api-key:
   - api-key: "fixture-upstream-key"
     base-url: "http://127.0.0.1:$DUMMY_PORT/v1"
+$management_yaml
 $extra_yaml
 YAML
 	(cd "$REPO_ROOT" && go build -o "$ROOT/cpa" ./cmd/server)

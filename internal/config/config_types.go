@@ -232,8 +232,9 @@ type CodexConfig struct {
 	// Defaults to "CLIProxyAPI".
 	SignInWithChatGPTIdentifier string `yaml:"signin-with-chatgpt-identifier,omitempty" json:"signin-with-chatgpt-identifier,omitempty"`
 	// RefuseExhaustedIncludedUsage refuses GPT requests on an OAuth credential
-	// while its last observed primary or secondary usage window is at 100% and
-	// has not reset, so no request can draw on purchased credits.
+	// while a read of the account's usage endpoint, or the latest response
+	// headers, show included usage exhausted, and while the usage is unknown,
+	// so no request can draw on purchased credits.
 	RefuseExhaustedIncludedUsage bool `yaml:"refuse-exhausted-included-usage" json:"refuse-exhausted-included-usage"`
 }
 

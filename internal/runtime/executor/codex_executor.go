@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -45,17 +44,18 @@ func (codexUsageGuardError) IsRequestScoped() bool {
 }
 
 const (
-	// codexUsageAllowedTTL bounds an allowed usage snapshot whose windows name
-	// no reset time.
+	// codexUsageAllowedTTL bounds a usage snapshot whose windows name no reset
+	// time. An allowed snapshot goes stale at codexUsageFreshFor first, so this
+	// bound decides only for an exhausted snapshot.
 	codexUsageAllowedTTL = 5 * time.Minute
-	// codexUsageProbeTimeout bounds one usage read. It is a stated exception to
-	// AGENTS.md:59 (spec section "Exceptions to the Fork's Network Rule"): the
+	// codexUsageProbeTimeout bounds one usage read. It is an exception to the
+	// AGENTS.md rule against timeouts after connection: the
 	// guard holds a request until its read returns, so an unbounded read would
 	// hold every GPT request on the account. CodexBar bounds the same read at
 	// 30 seconds (CodexOAuthUsageFetcher.fetchUsage, timeoutInterval: 30).
 	codexUsageProbeTimeout = 15 * time.Second
 	// codexUsageFreshFor is how long an allowed read stands without a new read.
-	// Another client on the same account (Codex CLI, decision line 33) spends
+	// Another client on the same account (Codex CLI) spends
 	// usage the proxy does not see, so an older read may be stale. One minute is
 	// CodexBar's shortest usage refresh timer (refreshFrequency oneMinute).
 	codexUsageFreshFor = time.Minute
@@ -103,7 +103,7 @@ type codexUsageWindow struct {
 	ResetAt     int64   `json:"reset_at"`
 }
 
-// admitCodexIncludedUsage is the R1-G1 included-usage guard. With
+// admitCodexIncludedUsage is the included-usage guard. With
 // codex.refuse-exhausted-included-usage on, a GPT request on an OAuth Codex
 // credential is sent only while the latest usage read allows included usage.
 // The first request after start reads usage. An allowed snapshot is reused
@@ -163,7 +163,7 @@ func codexUsageSnapshotMayBeStale(snap *codexUsageSnapshot, quota cliproxyauth.Q
 func codexObservedUsedPercent(quota cliproxyauth.QuotaState) float64 {
 	highest := 0.0
 	for _, key := range []string{"X-Codex-Primary-Used-Percent", "X-Codex-Secondary-Used-Percent"} {
-		if value, errParse := strconv.ParseFloat(strings.TrimSpace(quota.Signals[key]), 64); errParse == nil && value > highest {
+		if value, ok := quota.SignalPercent(key); ok && value > highest {
 			highest = value
 		}
 	}
@@ -171,8 +171,8 @@ func codexObservedUsedPercent(quota cliproxyauth.QuotaState) float64 {
 }
 
 // probeCodexIncludedUsage reads usage once. It sends the account's own token
-// and account ID, no reserve header, and follows no redirect (the R1-C2
-// client). Any result other than an allowed decision is a refusal.
+// and account ID, no reserve header, and follows no redirect. Any result
+// other than an allowed decision is a refusal.
 func probeCodexIncludedUsage(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, now time.Time) *codexUsageSnapshot {
 	unknown := func(reason string) *codexUsageSnapshot {
 		return &codexUsageSnapshot{validUntil: now, readAt: now, detail: "included ChatGPT usage is unknown (" + reason + ")"}

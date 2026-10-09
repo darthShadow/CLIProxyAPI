@@ -12,7 +12,8 @@ nothing. FIXTURE_MODE selects the answer:
   overflow           ChatGPT answers ok for a new conversation, then 400
                      context_length_exceeded when input contains a completed assistant turn
   (FIXTURE_SUBAGENT_TYPE names the agent; FIXTURE_GPT_INPUT_TOKENS sets the
-  ChatGPT usage input_tokens the dummy reports)
+  ChatGPT usage input_tokens the dummy reports; FIXTURE_GPT_TOOL_FIRST=N gives
+  each of the first N ChatGPT requests that offer a function tool one call to that tool)
   agent              the first main-thread Anthropic request that offers an Agent or
                      Task tool gets one tool_use for it; later requests get "ok"
   permprobe          a main-thread Anthropic request that offers Bash gets one Bash
@@ -60,9 +61,21 @@ def chatgpt_stream(model, fail):
     return sse(events)
 
 
+def chatgpt_tool_stream(model, name, n):
+    call = {"type": "function_call", "id": "fc_fixture_%d" % n, "call_id": "call_fixture_%d" % n, "name": name, "arguments": "{}", "status": "completed"}
+    tokens = int(os.environ.get("FIXTURE_GPT_INPUT_TOKENS", "12"))
+    return sse([
+        ("response.created", {"type": "response.created", "sequence_number": 0, "response": {"id": "resp_fixture_tool_%d" % n, "model": model, "status": "in_progress"}}),
+        ("response.output_item.added", {"type": "response.output_item.added", "sequence_number": 1, "output_index": 0, "item": dict(call, arguments="", status="in_progress")}),
+        ("response.output_item.done", {"type": "response.output_item.done", "sequence_number": 2, "output_index": 0, "item": call}),
+        ("response.completed", {"type": "response.completed", "sequence_number": 3, "response": {"id": "resp_fixture_tool_%d" % n, "model": model, "status": "completed", "output": [call], "usage": {"input_tokens": tokens, "output_tokens": 1, "total_tokens": tokens + 1}}}),
+    ])
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     agent_sent = False
+    gpt_tools_sent = 0
 
     def log_message(self, *args):
         pass
@@ -101,6 +114,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.reply(400, CHATGPT_OVERFLOW)
         if self.path.endswith("/count_tokens"):
             return self.reply(200, b'{"input_tokens":12}')
+        if chatgpt and Handler.gpt_tools_sent < int(os.environ.get("FIXTURE_GPT_TOOL_FIRST", "0")):
+            name = next((t.get("name") for t in payload.get("tools", []) if t.get("type") == "function" and t.get("name")), None)
+            if name:
+                Handler.gpt_tools_sent += 1
+                return self.reply(200, chatgpt_tool_stream(model, name, Handler.gpt_tools_sent), "text/event-stream")
         if chatgpt:
             return self.reply(200, chatgpt_stream(model, MODE == "codex_instream"), "text/event-stream")
         if MODE == "agent" and not chatgpt and not Handler.agent_sent:
@@ -108,17 +126,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if tool:
                 Handler.agent_sent = True
                 use = {"type": "tool_use", "id": "toolu_fixture", "name": tool, "input": {"description": "fixture", "prompt": "Reply with ok.", "subagent_type": os.environ.get("FIXTURE_SUBAGENT_TYPE", "general-purpose")}}
-                message = {"id": "msg_fixture_agent", "type": "message", "role": "assistant", "model": model, "content": [use], "stop_reason": "tool_use", "usage": {"input_tokens": 12, "output_tokens": 1}}
-                if payload.get("stream"):
-                    return self.reply(200, sse([
-                        ("message_start", {"type": "message_start", "message": dict(message, content=[], stop_reason=None)}),
-                        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": dict(use, input={})}),
-                        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": json.dumps(use["input"])}}),
-                        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
-                        ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 1}}),
-                        ("message_stop", {"type": "message_stop"}),
-                    ]), "text/event-stream")
-                return self.reply(200, json.dumps(message).encode())
+                return self.tool_use_reply(model, payload, use)
         if MODE == "permprobe" and not chatgpt and any(t.get("name") == "Bash" for t in payload.get("tools", [])):
             commands = [c for c in os.environ.get("FIXTURE_PERM_COMMANDS", "").split("|") if c]
             results = [c for m in payload.get("messages", []) if isinstance(m.get("content"), list) for c in m["content"] if isinstance(c, dict) and c.get("type") == "tool_result"]

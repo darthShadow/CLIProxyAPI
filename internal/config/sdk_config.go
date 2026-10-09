@@ -99,8 +99,8 @@ type ClaudeCodeConfig struct {
 	// DisableCloakingModelList disables model ID cloaking in Anthropic model list responses.
 	DisableCloakingModelList bool `yaml:"disable-cloaking-model-list" json:"disable-cloaking-model-list"`
 
-	// RefuseUnconfirmedClients refuses every Claude Messages and count_tokens
-	// request that is not confirmed as native Claude Code at exactly the
+	// RefuseUnconfirmedClients refuses every Claude Messages, count_tokens, and
+	// HttpRequest call that is not confirmed as native Claude Code at exactly the
 	// claude-header-defaults user-agent version. A refused request gets a local
 	// 400 and nothing is sent upstream.
 	RefuseUnconfirmedClients bool `yaml:"refuse-unconfirmed-clients" json:"refuse-unconfirmed-clients"`

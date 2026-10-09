@@ -1,5 +1,5 @@
 #!/opt/homebrew/bin/bash
-# Recovered row 100, fixture F8: real Claude Code 2.1.285 with the proxy overlay.
+# Recovered row 100, fixture F8: real Claude Code (CLAUDE_BIN) with the proxy overlay.
 # Pass: no request is refused; the main thread writes 1-hour cache markers and
 # the subagent 5-minute markers; any client prompt IDs reach the upstream unchanged;
 # no billing block. The added "stream": false is covered by step A2. Answers spec Questions 1-3 locally.

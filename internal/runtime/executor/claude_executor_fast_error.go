@@ -133,10 +133,10 @@ func wrapClaudeFastRequestError(fastRequest bool, status int, err error) error {
 	return &claudeFastRequestError{cause: err, status: status, retryAfter: retryAfter}
 }
 
-// claudeBillingPassthroughStatus reports the upstream statuses that a renewal or
+// billingPassthroughStatus reports the upstream statuses that a renewal or
 // payment problem produces. They go back to the client with the upstream status,
 // headers, and body unchanged, and with no retry, account move, or cooldown.
-func claudeBillingPassthroughStatus(status int) bool {
+func billingPassthroughStatus(status int) bool {
 	return status == http.StatusPaymentRequired || status == http.StatusForbidden
 }
 

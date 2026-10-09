@@ -11,7 +11,7 @@ check_direct() {
 	local port="$1" label="$2" status body
 	for stream in false true; do
 		status=$(curl -s -o "$ROOT/$label-$stream.body" -w '%{http_code}' -H 'Authorization: Bearer fixture-proxy-key' \
-			-H 'Content-Type: application/json' -H 'User-Agent: claude-cli/2.1.285 (external, cli)' -H 'anthropic-beta: claude-code-20250219' \
+			-H 'Content-Type: application/json' -H "User-Agent: $CLAUDE_UA" -H 'anthropic-beta: claude-code-20250219' \
 			-d "{\"model\":\"gpt-6.1-sol\",\"max_tokens\":8,\"stream\":$stream,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" \
 			"http://127.0.0.1:$port/v1/messages")
 		[ "$status" = 402 ] || fail "$label stream=$stream status $status, want 402"
@@ -32,7 +32,7 @@ fixture_stop; PIDS=()
 fixture_init f6s 18500
 start_stack codex_instream
 status=$(curl -s -N -o "$ROOT/instream.body" -w '%{http_code}' -H 'Authorization: Bearer fixture-proxy-key' -H 'Content-Type: application/json' \
-	-H 'User-Agent: claude-cli/2.1.285 (external, cli)' -H 'anthropic-beta: claude-code-20250219' \
+	-H "User-Agent: $CLAUDE_UA" -H 'anthropic-beta: claude-code-20250219' \
 	-d '{"model":"gpt-6.1-sol","max_tokens":8,"stream":true,"messages":[{"role":"user","content":"hi"}]}' "http://127.0.0.1:$CPA_PORT/v1/messages")
 grep -q '^event: error' "$ROOT/instream.body" || fail "no event: error frame after stream start"
 grep -q '"error":{"type":"billing_error","code":"payment_required","message":"fixture renewal needed","fixture_field":1}' "$ROOT/instream.body" \

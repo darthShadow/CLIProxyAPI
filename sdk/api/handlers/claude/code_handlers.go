@@ -508,7 +508,7 @@ func (h *ClaudeCodeAPIHandler) WriteErrorResponse(c *gin.Context, msg *interface
 	if err != nil {
 		body = []byte(`{"type":"error","error":{"type":"api_error","message":"Internal Server Error"}}`)
 	}
-	// Release 1 (R1-E2): a valid Anthropic error envelope from the upstream is
+	// A valid Anthropic error envelope from the upstream is
 	// written unchanged, so fields such as request_id reach the client.
 	if upstream, ok := anthropicErrorEnvelope(msg); ok {
 		body = upstream

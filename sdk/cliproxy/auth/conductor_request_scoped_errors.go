@@ -32,7 +32,7 @@ func (e requestStopError) IsRequestStop() bool {
 }
 
 // Headers forwards the wrapped error's client headers, so a stop rule does not
-// drop them (Release 1, R1-E2).
+// drop them.
 func (e requestStopError) Headers() http.Header {
 	if carrier, ok := e.error.(interface{ Headers() http.Header }); ok && carrier != nil {
 		return carrier.Headers()

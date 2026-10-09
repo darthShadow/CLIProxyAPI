@@ -683,8 +683,8 @@ func (e claudeRateLimitError) Headers() http.Header {
 }
 
 // claudeClientErrorHeaders keeps the upstream error headers Claude Code reads:
-// the anthropic-ratelimit family, Retry-After, request-id, and x-should-retry
-// (Release 1, R1-E2). It returns nil when none is present.
+// the anthropic-ratelimit family, Retry-After, request-id, and x-should-retry.
+// It returns nil when none is present.
 func claudeClientErrorHeaders(headers http.Header) http.Header {
 	var out http.Header
 	for key, values := range headers {
