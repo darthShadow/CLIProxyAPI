@@ -8,15 +8,17 @@ codex_catalog="$catalog_dir/codex_client_models.json"
 codex_candidate="$(mktemp)"
 trap 'rm -f "$codex_candidate"' EXIT
 
-git fetch --depth 1 "$models_repository" "$models_ref"
-git show FETCH_HEAD:models.json > "$catalog_dir/models.json"
-
-if git show FETCH_HEAD:codex_client_models.json > "$codex_candidate" &&
-  go run ./cmd/validate_codex_models --file "$codex_candidate"; then
-	mv "$codex_candidate" "$codex_catalog"
-	printf 'Refreshed validated Codex client model catalog.\n'
-else
-	printf '::warning::Remote Codex client model catalog is missing or invalid; using embedded fallback.\n'
-fi
+# Fork: builds embed the committed catalogs, the ones the upgrade gate and the
+# -local-model deploys ran; a fetch here would ship an untested catalog.
+# git fetch --depth 1 "$models_repository" "$models_ref"
+# git show FETCH_HEAD:models.json > "$catalog_dir/models.json"
+#
+# if git show FETCH_HEAD:codex_client_models.json > "$codex_candidate" &&
+#   go run ./cmd/validate_codex_models --file "$codex_candidate"; then
+# 	mv "$codex_candidate" "$codex_catalog"
+# 	printf 'Refreshed validated Codex client model catalog.\n'
+# else
+# 	printf '::warning::Remote Codex client model catalog is missing or invalid; using embedded fallback.\n'
+# fi
 
 go run ./cmd/validate_codex_models --file "$codex_catalog"
