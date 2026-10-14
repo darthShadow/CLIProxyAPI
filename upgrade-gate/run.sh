@@ -70,7 +70,9 @@ ALLOWED="$GATE_DIR/allowed/$NEW_VERSION.txt"
 labels="old new"
 # Linux-x64 mode (header): the old side is the darwin PASS records of this version.
 if [ -d "$OLD_BIN" ]; then
-	[ "$(ls /sys/class/net 2>/dev/null)" = lo ] || { echo "STOP: a records directory runs only under docker run --network none"; exit 2; }
+	# Interfaces are the symlinks; a host with the bonding module also shows the file bonding_masters.
+	# [ "$(ls /sys/class/net 2>/dev/null)" = lo ] || { echo "STOP: a records directory runs only under docker run --network none"; exit 2; }
+	[ "$(find /sys/class/net -mindepth 1 -maxdepth 1 -type l -printf '%f\n' 2>/dev/null)" = lo ] || { echo "STOP: a records directory runs only under docker run --network none"; exit 2; }
 	cp -R "$OLD_BIN" "$OUT/old"
 	LC_ALL=C /usr/bin/grep -qF "claude-cli/$NEW_VERSION (" "$OUT"/old/r1-client-f8.*/client.jsonl \
 		|| { echo "STOP: $OLD_BIN holds no $NEW_VERSION records"; exit 2; }
