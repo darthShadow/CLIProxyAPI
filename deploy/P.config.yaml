@@ -37,7 +37,7 @@ claude-code:
 # The only Claude Code version tie: change it, behind the upgrade gate, when
 # Claude Code moves to a new version.
 claude-header-defaults:
-  user-agent: "claude-cli/2.1.295 (external, cli)"
+  user-agent: "claude-cli/2.1.299 (external, cli)"
 codex:
   refuse-exhausted-included-usage: true
   # Stays off: the relay binds WebRTC UDP ports on every interface. Only the

@@ -1208,13 +1208,14 @@ func TestAntigravityExecutor_StrictBypassLogsStrippedInvalidSignature(t *testing
 func TestClaudeExecutor_LogsSanitizedClaudeUpstreamSignatures(t *testing.T) {
 	hook := newSignatureDebugHook(t)
 	rawSignature := "skip_thought_signature_validator"
+	rawThinking := "private thinking text for the signature log test"
 	body := []byte(`{
 		"model": "claude-sonnet-4-5",
 		"messages": [
 			{
 				"role": "assistant",
 				"content": [
-					{"type": "thinking", "thinking": "bad", "signature": "` + rawSignature + `"},
+					{"type": "thinking", "thinking": "` + rawThinking + `", "signature": "` + rawSignature + `"},
 					{"type": "text", "text": "hello"},
 					{"type": "tool_use", "id": "call_123", "name": "get_weather", "input": {}, "signature": "` + rawSignature + `"}
 				]
@@ -1231,9 +1232,9 @@ func TestClaudeExecutor_LogsSanitizedClaudeUpstreamSignatures(t *testing.T) {
 		t.Fatalf("tool_use signature should be removed before Claude upstream: %s", output)
 	}
 
-	found := false
+	matches := 0
 	for _, entry := range hook.AllEntries() {
-		if entry.Level != log.DebugLevel {
+		if entry.Level != log.WarnLevel {
 			continue
 		}
 		if entry.Data["component"] != "signature_sanitizer" ||
@@ -1247,12 +1248,16 @@ func TestClaudeExecutor_LogsSanitizedClaudeUpstreamSignatures(t *testing.T) {
 		if entry.Data["dropped_signatures"] != 1 {
 			t.Fatalf("dropped_signatures = %v, want 1", entry.Data["dropped_signatures"])
 		}
-		found = true
+		if !strings.Contains(entry.Message, "dropped_blocks=1 dropped_signatures=1 ") {
+			t.Fatalf("warn message = %q, want dropped_blocks=1 dropped_signatures=1", entry.Message)
+		}
+		matches++
 	}
-	if !found {
-		t.Fatal("expected debug log for Claude upstream signature sanitization")
+	if matches != 1 {
+		t.Fatalf("warn log entries = %d, want 1 for Claude upstream signature sanitization", matches)
 	}
 	assertSignatureDebugDoesNotLeak(t, hook, rawSignature)
+	assertSignatureDebugDoesNotLeak(t, hook, rawThinking)
 }
 
 func TestAntigravityExecutor_NonStrictBypassSkipsPrecheck(t *testing.T) {

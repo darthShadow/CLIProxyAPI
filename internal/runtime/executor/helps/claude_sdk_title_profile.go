@@ -2,23 +2,23 @@ package helps
 
 import "github.com/tidwall/gjson"
 
-// The Agent SDK (sdk-ts) session-title helper of Claude Code 2.1.295, as
+// The Agent SDK (sdk-ts) session-title helper of Claude Code 2.1.299, as
 // test/release1-client/sdk_ts.sh recorded it (Agent SDK 0.3.290, the Haiku
 // model of the shared settings, attribution off). It reaches the proxy with the
 // proxy's own key, so its beta list has no OAuth beta. claudeCodeSDKTitleKeys is
 // its top-level key order; claudeCodeSDKTitleFixed holds the raw JSON of every
 // top-level value except messages, system, and metadata.
 //
-// The session title of interactive Claude Code 2.1.295 (cli) has the same keys
+// The session title of interactive Claude Code 2.1.299 (cli) has the same keys
 // and fixed values, and the CLI identity as its first system block. Its beta
 // list is claudeCodeSDKTitleBetas when showThinkingSummaries is on, as in the
 // shared settings, and claudeCodeCLITitleBetas, which adds
 // redact-thinking-2026-02-12, when it is off, as an attended loopback session
 // recorded it.
 const (
-	claudeCodeSDKTitleBetas = "context-1m-2025-08-07,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,effort-2025-11-24,structured-outputs-2025-12-15"
+	claudeCodeSDKTitleBetas = "context-1m-2025-08-07,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,effort-2025-11-24,structured-outputs-2025-12-15"
 	claudeCodeSDKIdentity   = "You are a Claude agent, built on Anthropic's Claude Agent SDK."
-	claudeCodeCLITitleBetas = "context-1m-2025-08-07,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,effort-2025-11-24,structured-outputs-2025-12-15"
+	claudeCodeCLITitleBetas = "context-1m-2025-08-07,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,effort-2025-11-24,structured-outputs-2025-12-15"
 	claudeCodeCLIIdentity   = "You are Claude Code, Anthropic's official CLI for Claude."
 )
 

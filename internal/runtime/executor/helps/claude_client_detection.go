@@ -196,7 +196,7 @@ func matchesMeasuredClaudeCodeHelperProfile(
 	}
 
 	shape := measuredClaudeCodeHelperBetaProfiles[normalizedClaudeBetaHeader(headers)]
-	// The 2.1.295 session title comes from sdk-ts or cli, by its system identity
+	// The 2.1.299 session title comes from sdk-ts or cli, by its system identity
 	// and beta list; every other measured helper comes from cli.
 	entrypoint := "cli"
 	if shape == claudeCodeHelperShapeTitleSDK {

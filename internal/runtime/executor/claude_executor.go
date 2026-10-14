@@ -130,14 +130,19 @@ func logClaudeSignatureSanitizeReport(ctx context.Context, baseModel string, rep
 		"dropped_signatures":  report.DroppedSignatures,
 		"replaced_signatures": report.ReplacedSignatures,
 	}
+	firstReason := ""
 	if len(report.Decisions) > 0 {
 		decision := report.Decisions[0]
 		fields["first_block_kind"] = string(decision.BlockKind)
 		fields["first_detected_provider"] = string(decision.DetectedProvider)
 		fields["first_reason"] = decision.Reason
+		firstReason = decision.Reason
 	}
 
-	helps.LogWithRequestID(ctx).WithFields(fields).Debug("claude executor: sanitized signature history before upstream")
+	// Warn makes signature history changes visible at the default Info level. The counts
+	// and first reason go in the message because LogFormatter prints only listed fields.
+	// helps.LogWithRequestID(ctx).WithFields(fields).Debug("claude executor: sanitized signature history before upstream")
+	helps.LogWithRequestID(ctx).WithFields(fields).Warnf("claude executor: sanitized signature history before upstream (dropped_blocks=%d dropped_signatures=%d replaced_signatures=%d first_reason=%q)", report.DroppedBlocks, report.DroppedSignatures, report.ReplacedSignatures, firstReason)
 }
 
 // Anthropic-compatible upstreams may reject or even crash when Claude models

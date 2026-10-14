@@ -15,9 +15,12 @@
 # (@anthropic-ai/claude-agent-sdk@0.3.290). Each tarball's sha512 must equal
 # npm view <package>@<version> dist.integrity. The packed package/claude and
 # the <current claude binary> argument must have the sha256 recorded when that
-# version was pinned (2.1.295:
-# 0116ee2e0a513900b633d9951367f18747686478e2b462805b8c31609f047f70), and the
+# version was pinned (2.1.299:
+# ba5ab7b8c195fa03ab8d5bf3915c76153b576a2c40e79a5c46e265e7ed9744b3), and the
 # packed package/sdk.mjs must equal SDK_DIR/sdk.mjs.
+#
+# CPA_BIN_OLD (optional) is the proxy build of the current pair for the old
+# side; the new side uses CPA_BIN. Without it both sides use CPA_BIN.
 #
 # Approved gaps: the gate does not compare or decide
 # - helper requests that only interactive sessions send (the fixtures run -p,
@@ -44,11 +47,13 @@ OUT="$(mktemp -d /tmp/claude-501/upgrade-gate.XXXXXX)"
 status=0
 for label in old new; do
 	bin="$OLD_BIN"
+	cpa="${CPA_BIN_OLD:-${CPA_BIN:-}}"
 	[ "$label" = old ] || bin="$NEW_BIN"
+	[ "$label" = old ] || cpa="${CPA_BIN:-}"
 	mkdir "$OUT/$label"
 	for name in f1_listener_keys f24_version_pin f8_real_client f20_background_gpt f32_settings_merge f34_cloak_inputs f5_client_429 f6_billing f28_overflow f26_gpt_window sdk_ts; do
 		rc=0
-		CLAUDE_BIN="$bin" FIXTURE_TMP="$OUT/$label" /opt/homebrew/bin/bash "$FIXTURE_DIR/$name.sh" >"$OUT/$label/$name.out" 2>&1 || rc=$?
+		CPA_BIN="$cpa" CLAUDE_BIN="$bin" FIXTURE_TMP="$OUT/$label" /opt/homebrew/bin/bash "$FIXTURE_DIR/$name.sh" >"$OUT/$label/$name.out" 2>&1 || rc=$?
 		result="$(LC_ALL=C /usr/bin/grep -E '^(PASS|FAIL|INCONCLUSIVE):' "$OUT/$label/$name.out" | tail -n 1 | cut -c 1-160 || true)"
 		echo "RECORD fixture $label $name exit=$rc $result"
 		if [ "$rc" != 0 ] || LC_ALL=C /usr/bin/grep -q '^FAIL:' "$OUT/$label/$name.out"; then

@@ -94,7 +94,7 @@ func TestDetectClaudeCodeRequestConfirmsSDKTitle(t *testing.T) {
 }
 
 // The capture is the relay record of the session title of interactive Claude
-// Code 2.1.295 (entrypoint cli) from a run before admission, with the Haiku
+// Code 2.1.299 (entrypoint cli) from a run before admission, with the Haiku
 // model of the shared settings and showThinkingSummaries unset; the test reads
 // only its headers and body.
 func TestDetectClaudeCodeRequestConfirmsCLITitle(t *testing.T) {
