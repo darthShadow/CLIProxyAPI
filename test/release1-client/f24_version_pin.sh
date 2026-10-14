@@ -12,7 +12,8 @@ start_stack ok
 run_claude -p "Reply ok." --max-turns 1
 sed -e "s/port: $CPA_PORT/port: $W_PORT/" -e "s#base-url: \"http://127.0.0.1:$DUMMY_PORT\"#base-url: \"http://127.0.0.1:$CPA_PORT\"#" \
 	-e 's/fixture-upstream-key/fixture-proxy-key/' "$ROOT/cpa.yaml" >"$ROOT/w.yaml"
-"$ROOT/cpa" -config "$ROOT/w.yaml" -local-model >"$ROOT/w.log" 2>&1 &
+HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 NO_PROXY=127.0.0.1,localhost \
+	"$ROOT/cpa" -config "$ROOT/w.yaml" -local-model >"$ROOT/w.log" 2>&1 &
 PIDS+=("$!"); sleep 2
 NEWER="${CLAUDE_VERSION%.*}.$(( ${CLAUDE_VERSION##*.} + 1 ))"
 OLDER="${CLAUDE_VERSION%.*}.$(( ${CLAUDE_VERSION##*.} - 1 ))"

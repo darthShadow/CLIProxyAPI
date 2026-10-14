@@ -1,7 +1,7 @@
 #!/opt/homebrew/bin/bash
-# Shared harness for the release 1 real-client fixtures. Local only: a fake
+# Shared harness for the release 1 real-client fixtures. A fake
 # proxy key, fake upstream keys, a new scratch HOME and CLAUDE_CONFIG_DIR, and
-# loopback dummies. Nothing leaves 127.0.0.1. Run each fixture with
+# loopback dummies. Proxy launches fence HTTP(S) traffic to loopback. Run each fixture with
 # /opt/homebrew/bin/bash from projects/CLIProxyAPI after VERIFY A.
 set -euo pipefail
 
@@ -19,7 +19,7 @@ fixture_init() {
 	test -z "$(ls -A "$ROOT/config")" || { echo "STOP: config dir not new"; exit 2; }
 	trap fixture_stop EXIT
 	cat >"$ROOT/config/settings.json" <<JSON
-{"model":"opus","env":{"CLAUDE_CODE_ATTRIBUTION_HEADER":"0","ANTHROPIC_DEFAULT_OPUS_MODEL":"claude-opus-5-5[1m]","ANTHROPIC_DEFAULT_SONNET_MODEL":"claude-sonnet-5-5[1m]","ANTHROPIC_DEFAULT_HAIKU_MODEL":"claude-sonnet-5-5[1m]","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"384000","DISABLE_AUTO_COMPACT":"1","CLAUDE_CODE_MAX_OUTPUT_TOKENS":"64000","DISABLE_AUTOUPDATER":"1","X_FIXTURE_SHARED":"kept"}}
+{"model":"opus","env":{"CLAUDE_CODE_ATTRIBUTION_HEADER":"0","ANTHROPIC_DEFAULT_OPUS_MODEL":"claude-opus-5-5[1m]","ANTHROPIC_DEFAULT_SONNET_MODEL":"claude-sonnet-5-5[1m]","ANTHROPIC_DEFAULT_HAIKU_MODEL":"claude-haiku-5-5[1m]","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"384000","DISABLE_AUTO_COMPACT":"1","CLAUDE_CODE_MAX_OUTPUT_TOKENS":"64000","DISABLE_AUTOUPDATER":"1","X_FIXTURE_SHARED":"kept"}}
 JSON
 	# The proxy overlay as cc-switch generates it from proxy-settings.json.
 	cat >"$ROOT/overlay.json" <<JSON
@@ -68,8 +68,15 @@ codex-api-key:
 $management_yaml
 $extra_yaml
 YAML
-	(cd "$REPO_ROOT" && go build -o "$ROOT/cpa" ./cmd/server)
-	"$ROOT/cpa" -config "$ROOT/cpa.yaml" -local-model >"$ROOT/cpa.log" 2>&1 &
+	# CPA_BIN names one prebuilt server at a fixed path, so a firewall sees one
+	# binary across fixtures; unset, each fixture builds its own.
+	if [ -n "${CPA_BIN:-}" ]; then
+		ln -s "$CPA_BIN" "$ROOT/cpa"
+	else
+		(cd "$REPO_ROOT" && go build -o "$ROOT/cpa" ./cmd/server)
+	fi
+	HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 NO_PROXY=127.0.0.1,localhost \
+		"$ROOT/cpa" -config "$ROOT/cpa.yaml" -local-model >"$ROOT/cpa.log" 2>&1 &
 	PIDS+=("$!")
 	python3 "$FIXTURE_DIR/relay.py" "$ROOT/client.jsonl" "$RELAY_PORT" "$CPA_PORT" &
 	PIDS+=("$!")

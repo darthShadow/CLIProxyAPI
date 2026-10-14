@@ -317,8 +317,8 @@ func TestStreamingUsage_FinalUsageAcrossChunks(t *testing.T) {
 			if !tt.cleanEOF {
 				chunks = append(chunks, "[DONE]")
 			}
-			// runStream supplies the terminal marker at EOF, as the executor does
-			// for Claude at openai_compat_executor.go:563-564. B1NODONE has no upstream marker.
+			// runStream supplies the terminal marker at EOF, as the non-Responses EOF
+			// branch in openai_compat_executor.go does for Claude. B1NODONE has no upstream marker.
 			events := runStream(t, streamReq, chunks...)
 			assertStreamingUsage(t, events, tt.input, 10, tt.cacheRead, tt.cacheWrite)
 		})

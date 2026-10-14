@@ -89,6 +89,9 @@ func release1RequireSharedPolicy(t *testing.T, cfg *config.Config) {
 	if !cfg.Codex.RefuseExhaustedIncludedUsage {
 		t.Fatal("codex.refuse-exhausted-included-usage = false, want true")
 	}
+	if cfg.Discovery.Enabled || cfg.Codex.LiveMediaRelay.Enabled {
+		t.Fatalf("discovery.enabled %v, codex.live-media-relay.enabled %v; want false, false (only the user turns either on, after testing it)", cfg.Discovery.Enabled, cfg.Codex.LiveMediaRelay.Enabled)
+	}
 	if !cfg.PassthroughHeaders || cfg.CommercialMode || cfg.RequestRetry != 0 || cfg.TransientErrorCooldownSeconds != -1 {
 		t.Fatalf("passthrough %v, commercial %v, request-retry %d, transient cooldown %d; want true, false, 0, -1", cfg.PassthroughHeaders, cfg.CommercialMode, cfg.RequestRetry, cfg.TransientErrorCooldownSeconds)
 	}

@@ -30,6 +30,7 @@ func TestRelease1ClaudeRefusesUnconfirmedRequestsBeforeUpstream(t *testing.T) {
 	}{
 		{name: "switch on, confirmed at configured version", refuse: true, userAgent: release1ClaudeUA, wantHits: 1},
 		{name: "switch on, newer patch version", refuse: true, userAgent: "claude-cli/2.1.286 (external, cli)", wantHits: 0, wantRefus: true},
+		{name: "switch on, claude-vscode at configured version", refuse: true, userAgent: "claude-cli/2.1.285 (external, claude-vscode)", wantHits: 0, wantRefus: true},
 		{name: "switch on, unknown client", refuse: true, userAgent: "curl/8.9.0", wantHits: 0, wantRefus: true},
 		{name: "switch off, unknown client keeps stock path", refuse: false, userAgent: "curl/8.9.0", wantHits: 1},
 	}
@@ -191,5 +192,41 @@ func TestRelease1ClaudePublicCountTokensAndHttpRequestRefuseUnconfirmed(t *testi
 	}
 	if got := upstream.hits.Load(); got != 0 {
 		t.Fatalf("upstream hits = %d, want 0", got)
+	}
+}
+
+// A measured helper without the OAuth beta, such as the Agent SDK session title
+// that reaches the proxy with the proxy's own key, gets it on an OAuth
+// credential, as a confirmed main turn does.
+func TestClaudeHelperProfileGetsOAuthBetaOnOAuthCredential(t *testing.T) {
+	const titleBetas = "interleaved-thinking-2025-05-14,context-management-2025-06-27,structured-outputs-2025-12-15"
+	incoming := http.Header{}
+	incoming.Set("Anthropic-Beta", titleBetas)
+	req := newClaudeHeaderTestRequest(t, nil)
+	if errHeaders := applyClaudeHeadersWithNativeProfile(req, claudeOAuthAuthForBetaPolicy(), claudeRaceProbeOAuthKey, false, nil,
+		[]byte(`{"model":"claude-haiku-4-5-20251001","tools":[]}`), nil, incoming, true, true); errHeaders != nil {
+		t.Fatalf("applyClaudeHeadersWithNativeProfile() error = %v", errHeaders)
+	}
+	if got, want := req.Header.Get("Anthropic-Beta"), "oauth-2025-04-20,"+titleBetas; got != want {
+		t.Fatalf("Anthropic-Beta = %q, want %q", got, want)
+	}
+}
+
+// Claude Code 2.1.295 sends effort-2025-11-24 with output_config.effort on its
+// Haiku 5.5 session title. A confirmed client keeps the beta it sent, although
+// the body is a Haiku helper.
+func TestClaudeConfirmedClientKeepsItsEffortBeta(t *testing.T) {
+	const titleBetas = "interleaved-thinking-2025-05-14,effort-2025-11-24,structured-outputs-2025-12-15"
+	incoming := http.Header{}
+	incoming.Set("Anthropic-Beta", titleBetas)
+	req := newClaudeHeaderTestRequest(t, nil)
+	body := []byte(`{"model":"claude-haiku-5-5","system":[{"type":"text","text":"You are naming a coding session."}],` +
+		`"output_config":{"effort":"medium","format":{"type":"json_schema","schema":{"type":"object","properties":{"title":{"type":"string"}}}}}}`)
+	if errHeaders := applyClaudeHeadersWithNativeProfile(req, &cliproxyauth.Auth{Attributes: map[string]string{"api_key": "fixture-key"}}, "fixture-key",
+		false, nil, body, &config.Config{}, incoming, true, true); errHeaders != nil {
+		t.Fatalf("applyClaudeHeadersWithNativeProfile() error = %v", errHeaders)
+	}
+	if got := req.Header.Get("Anthropic-Beta"); got != titleBetas {
+		t.Fatalf("Anthropic-Beta = %q, want %q", got, titleBetas)
 	}
 }

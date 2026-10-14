@@ -37,18 +37,34 @@ type antigravityHubUpdaterManifest struct {
 }
 
 var (
-	cachedAntigravityVersion = antigravityFallbackVersion
-	antigravityVersionMu     sync.RWMutex
-	antigravityVersionExpiry time.Time
-	antigravityUpdaterOnce   sync.Once
+	cachedAntigravityVersion  = antigravityFallbackVersion
+	antigravityVersionMu      sync.RWMutex
+	antigravityVersionExpiry  time.Time
+	antigravityUpdaterContext context.Context
+	antigravityUpdaterStarted bool
 )
+
+// ArmAntigravityVersionUpdater records the context for the first version read without fetching.
+// Arming an updater that has already started does not start another goroutine.
+// A nil context uses context.Background.
+func ArmAntigravityVersionUpdater(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	antigravityVersionMu.Lock()
+	defer antigravityVersionMu.Unlock()
+	antigravityUpdaterContext = ctx
+}
 
 // StartAntigravityVersionUpdater starts a background goroutine that periodically refreshes the cached antigravity version.
 // This is intentionally decoupled from request execution to avoid blocking executors on version lookups.
 func StartAntigravityVersionUpdater(ctx context.Context) {
-	antigravityUpdaterOnce.Do(func() {
+	antigravityVersionMu.Lock()
+	defer antigravityVersionMu.Unlock()
+	if !antigravityUpdaterStarted {
+		antigravityUpdaterStarted = true
 		go runAntigravityVersionUpdater(ctx)
-	})
+	}
 }
 
 func runAntigravityVersionUpdater(ctx context.Context) {
@@ -99,15 +115,18 @@ func refreshAntigravityVersion(ctx context.Context) {
 }
 
 // AntigravityLatestVersion returns the cached antigravity version refreshed by StartAntigravityVersionUpdater.
+// Its first read after arming starts the background updater without waiting for a fetch.
 // It falls back to antigravityFallbackVersion if the cache is empty or stale.
 func AntigravityLatestVersion() string {
-	antigravityVersionMu.RLock()
-	if cachedAntigravityVersion != "" && time.Now().Before(antigravityVersionExpiry) {
-		v := cachedAntigravityVersion
-		antigravityVersionMu.RUnlock()
-		return v
+	antigravityVersionMu.Lock()
+	defer antigravityVersionMu.Unlock()
+	if antigravityUpdaterContext != nil && !antigravityUpdaterStarted {
+		antigravityUpdaterStarted = true
+		go runAntigravityVersionUpdater(antigravityUpdaterContext)
 	}
-	antigravityVersionMu.RUnlock()
+	if cachedAntigravityVersion != "" && time.Now().Before(antigravityVersionExpiry) {
+		return cachedAntigravityVersion
+	}
 
 	return antigravityFallbackVersion
 }

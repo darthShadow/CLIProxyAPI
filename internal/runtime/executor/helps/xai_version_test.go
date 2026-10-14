@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestGetXAIClientVersionDefault(t *testing.T) {
@@ -309,5 +310,197 @@ func setXAIVersionProxyURLForTest(proxyURL string) func() {
 		xaiClientVersionMu.Lock()
 		xaiVersionProxyURL = old
 		xaiClientVersionMu.Unlock()
+	}
+}
+
+func TestXAIVersionUpdaterStartsOnFirstRead(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"version":"1.0.60"}`))
+	}))
+	defer server.Close()
+
+	restoreURL := OverrideXAINPMRegistryURLForTest(server.URL)
+	defer restoreURL()
+	restoreVersion := SetXAIClientVersionForTest(DefaultXAIFallbackClientVersion)
+	defer restoreVersion()
+	notified := make(chan struct{}, 2)
+	restoreHook := SetXAIVersionRefreshedHookForTest(notified)
+	defer restoreHook()
+
+	xaiClientVersionMu.Lock()
+	oldContext, oldCancel, oldProxy := xaiUpdaterContext, xaiUpdaterCancel, xaiVersionProxyURL
+	xaiUpdaterContext, xaiUpdaterCancel, xaiVersionProxyURL = nil, nil, ""
+	xaiClientVersionMu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		xaiClientVersionMu.Lock()
+		xaiUpdaterContext, xaiUpdaterCancel, xaiVersionProxyURL = oldContext, oldCancel, oldProxy
+		xaiClientVersionMu.Unlock()
+	}()
+
+	ArmXAIVersionUpdater(ctx, "")
+	xaiClientVersionMu.RLock()
+	started := xaiUpdaterCancel != nil
+	xaiClientVersionMu.RUnlock()
+	if started {
+		t.Fatal("xaiUpdaterCancel after arming is non-nil, want nil")
+	}
+	select {
+	case <-notified:
+		t.Fatalf("refreshes after arming = 1, want 0; requests = %d", requests.Load())
+	case <-time.After(50 * time.Millisecond):
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("requests after arming = %d, want 0", got)
+	}
+
+	GetXAIClientVersion()
+	waitXAIVersionRefresh(t, notified)
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("requests after first read = %d, want 1", got)
+	}
+	if got := GetXAIClientVersion(); got != "1.0.60" {
+		t.Fatalf("GetXAIClientVersion() = %q, want %q", got, "1.0.60")
+	}
+	select {
+	case <-notified:
+		t.Fatalf("extra refreshes after another read = 1, want 0; requests = %d", requests.Load())
+	case <-time.After(50 * time.Millisecond):
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("requests after another read = %d, want 1", got)
+	}
+}
+
+func TestXAIClientVersionUnarmedReadMakesNoRequest(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte(`{"version":"1.0.60"}`))
+	}))
+	defer server.Close()
+	restoreURL := OverrideXAINPMRegistryURLForTest(server.URL)
+	defer restoreURL()
+
+	xaiClientVersionMu.Lock()
+	oldContext, oldCancel, oldProxy := xaiUpdaterContext, xaiUpdaterCancel, xaiVersionProxyURL
+	xaiUpdaterContext, xaiUpdaterCancel, xaiVersionProxyURL = nil, nil, ""
+	xaiClientVersionMu.Unlock()
+	defer func() {
+		xaiClientVersionMu.Lock()
+		xaiUpdaterContext, xaiUpdaterCancel, xaiVersionProxyURL = oldContext, oldCancel, oldProxy
+		xaiClientVersionMu.Unlock()
+	}()
+
+	for _, version := range []string{DefaultXAIFallbackClientVersion, "1.0.55"} {
+		t.Run(version, func(t *testing.T) {
+			restoreVersion := SetXAIClientVersionForTest(version)
+			defer restoreVersion()
+			if got := GetXAIClientVersion(); got != version {
+				t.Fatalf("unarmed GetXAIClientVersion() = %q, want %q", got, version)
+			}
+			xaiClientVersionMu.RLock()
+			started := xaiUpdaterCancel != nil
+			xaiClientVersionMu.RUnlock()
+			if started {
+				t.Fatal("xaiUpdaterCancel after unarmed read is non-nil, want nil")
+			}
+		})
+	}
+	<-time.After(50 * time.Millisecond)
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("requests after unarmed reads = %d, want 0", got)
+	}
+}
+
+func TestArmXAIVersionUpdaterRebindsAfterFirstRead(t *testing.T) {
+	var requests atomic.Int32
+	secondRequested := make(chan bool, 1)
+	releaseSecond := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		version := "1.0.70"
+		if requests.Add(1) == 2 {
+			secondRequested <- r.URL.IsAbs()
+			select {
+			case <-releaseSecond:
+			case <-r.Context().Done():
+				return
+			}
+			version = "1.0.71"
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"version":` + strconv.Quote(version) + `}`))
+	}))
+	defer server.Close()
+	defer close(releaseSecond)
+	restoreURL := OverrideXAINPMRegistryURLForTest(server.URL)
+	defer restoreURL()
+	restoreVersion := SetXAIClientVersionForTest(DefaultXAIFallbackClientVersion)
+	defer restoreVersion()
+	notified := make(chan struct{}, 2)
+	restoreHook := SetXAIVersionRefreshedHookForTest(notified)
+	defer restoreHook()
+
+	xaiClientVersionMu.Lock()
+	oldContext, oldCancel, oldProxy := xaiUpdaterContext, xaiUpdaterCancel, xaiVersionProxyURL
+	xaiUpdaterContext, xaiUpdaterCancel, xaiVersionProxyURL = nil, nil, ""
+	xaiClientVersionMu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	rebindCtx, rebindCancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		rebindCancel()
+		xaiClientVersionMu.Lock()
+		xaiUpdaterContext, xaiUpdaterCancel, xaiVersionProxyURL = oldContext, oldCancel, oldProxy
+		xaiClientVersionMu.Unlock()
+	}()
+
+	ArmXAIVersionUpdater(ctx, "")
+	xaiClientVersionMu.RLock()
+	started := xaiUpdaterCancel != nil
+	xaiClientVersionMu.RUnlock()
+	if started {
+		t.Fatal("xaiUpdaterCancel after first arm is non-nil, want nil")
+	}
+	GetXAIClientVersion()
+	waitXAIVersionRefresh(t, notified)
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("requests after first read = %d, want 1", got)
+	}
+	if got := GetXAIClientVersion(); got != "1.0.70" {
+		t.Fatalf("GetXAIClientVersion() = %q, want %q after first refresh", got, "1.0.70")
+	}
+
+	ArmXAIVersionUpdater(rebindCtx, server.URL)
+	xaiClientVersionMu.RLock()
+	started, proxyURL := xaiUpdaterCancel != nil, xaiVersionProxyURL
+	xaiClientVersionMu.RUnlock()
+	if !started {
+		t.Fatal("xaiUpdaterCancel after rebind is nil, want non-nil")
+	}
+	if proxyURL != server.URL {
+		t.Fatalf("xaiVersionProxyURL after rebind = %q, want %q", proxyURL, server.URL)
+	}
+	select {
+	case proxied := <-secondRequested:
+		if !proxied {
+			t.Fatal("second refresh uses a direct request, want the rebound proxy")
+		}
+	case <-time.After(XAIVersionFetchTimeout):
+		t.Fatalf("requests after rebind = %d, want 2", requests.Load())
+	}
+	// Hold the rebound response until the first context is canceled to check its binding.
+	cancel()
+	releaseSecond <- struct{}{}
+	waitXAIVersionRefresh(t, notified)
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("requests after rebind = %d, want 2", got)
+	}
+	if got := GetXAIClientVersion(); got != "1.0.71" {
+		t.Fatalf("GetXAIClientVersion() after canceling the first context = %q, want %q", got, "1.0.71")
 	}
 }

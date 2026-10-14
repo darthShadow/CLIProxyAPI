@@ -29,7 +29,7 @@ const (
 var (
 	claudeCodeUserAgentPattern        = regexp.MustCompile(`(?i)^claude-cli/`)
 	claudeCodeUserAgentDetailsPattern = regexp.MustCompile(`(?i)^claude-cli/\S+\s+\(external,\s*([^,)]+)(?:,\s*agent-sdk/([^,)]+))?`)
-	claudeCodeNativeUserAgentPattern  = regexp.MustCompile(`(?i)^claude-cli/[0-9]+\.[0-9]+\.[0-9]+\s+\(external,\s*[^,)]+(?:,\s*agent-sdk/[0-9]+\.[0-9]+\.[0-9]+)?\)$`)
+	claudeCodeNativeUserAgentPattern  = regexp.MustCompile(`(?i)^claude-cli/[0-9]+\.[0-9]+\.[0-9]+\s+\(external,\s*[^,)]+(?:,\s*agent-sdk/[0-9]+\.[0-9]+\.[0-9]+)?(?:,\s*workload/cron)?\)$`)
 )
 
 var claudeCodeSubclientByEntrypoint = map[string]string{
@@ -66,6 +66,7 @@ var claudeCodeSubclientByEntrypoint = map[string]string{
 var nativeClaudeEntrypoints = map[string]bool{
 	"cli":           true,
 	"sdk-cli":       true,
+	"sdk-ts":        true,
 	"claude-vscode": true,
 }
 
@@ -76,6 +77,7 @@ const (
 	claudeCodeHelperShapeMinimal
 	claudeCodeHelperShapeStructured
 	claudeCodeHelperShapeTitle280
+	claudeCodeHelperShapeTitleSDK
 
 	claudeCodeHelperModel = "claude-haiku-4-5-20251001"
 )
@@ -110,6 +112,8 @@ var measuredClaudeCodeHelperBetaProfiles = map[string]claudeCodeHelperShape{
 		"fallback-credit-2026-06-01",
 		"cache-diagnosis-2026-04-07",
 	): claudeCodeHelperShapeTitle280,
+	claudeCodeSDKTitleBetas: claudeCodeHelperShapeTitleSDK,
+	claudeCodeCLITitleBetas: claudeCodeHelperShapeTitleSDK,
 }
 
 // ClaudeCodeRequestDetection records the strong signals and first-party
@@ -133,8 +137,9 @@ type ClaudeCodeRequestDetection struct {
 // applies CPA's native-client policy. Standard Messages requests require all
 // four strong signals; count_tokens omits metadata.user_id. A separate narrow
 // profile recognizes measured native Haiku helper requests that intentionally
-// omit claude-code-20250219. Generic sdk-ts/sdk-py Agent SDK entrypoints remain
-// unconfirmed and receive CLI cloaking.
+// omit claude-code-20250219, among them the Agent SDK (sdk-ts) session title.
+// The sdk-py Agent SDK entrypoint remains unconfirmed: CLI cloaking, or a local
+// 400 when refuse-unconfirmed-clients is on.
 func DetectClaudeCodeRequest(headers http.Header, payload []byte, countTokens bool, configs ...*config.Config) ClaudeCodeRequestDetection {
 	var cfg *config.Config
 	if len(configs) > 0 {
@@ -183,7 +188,6 @@ func matchesMeasuredClaudeCodeHelperProfile(
 	cfg *config.Config,
 ) bool {
 	if countTokens ||
-		detection.Entrypoint != "cli" ||
 		detection.BetasPresent ||
 		!detection.XAppCLI ||
 		!detection.UserAgent ||
@@ -192,7 +196,13 @@ func matchesMeasuredClaudeCodeHelperProfile(
 	}
 
 	shape := measuredClaudeCodeHelperBetaProfiles[normalizedClaudeBetaHeader(headers)]
-	if shape == claudeCodeHelperShapeNone || measuredClaudeCodeHelperBodyShape(payload) != shape {
+	// The 2.1.295 session title comes from sdk-ts or cli, by its system identity
+	// and beta list; every other measured helper comes from cli.
+	entrypoint := "cli"
+	if shape == claudeCodeHelperShapeTitleSDK {
+		entrypoint = claudeCodeTitleEntrypoint(payload, normalizedClaudeBetaHeader(headers))
+	}
+	if shape == claudeCodeHelperShapeNone || detection.Entrypoint != entrypoint || measuredClaudeCodeHelperBodyShape(payload) != shape {
 		return false
 	}
 	if !measuredClaudeCodeHelperHeadersMatch(headers, cfg, shape) {
@@ -280,7 +290,10 @@ func measuredClaudeCodeHelperHeadersMatch(headers http.Header, cfg *config.Confi
 		candidate.version = version
 		candidate.hasVersion = true
 	}
-	if !meetsClaudeDeviceProfileBaseline(candidate, profile) {
+	// The session titles skip the configured software tuple: the deploy configs
+	// pin only the User-Agent, whose version DetectClaudeCodeRequest checks, and
+	// the HTTP SDK and runtime versions follow the binary.
+	if shape != claudeCodeHelperShapeTitleSDK && !meetsClaudeDeviceProfileBaseline(candidate, profile) {
 		return false
 	}
 	// Claude Code 2.1.258 (@anthropic-ai/sdk 0.112.1), measured 2026-09-02 on the
@@ -326,6 +339,9 @@ func measuredClaudeCodeHelperSessionMatches(headers http.Header, payload []byte)
 }
 
 func measuredClaudeCodeHelperBodyShape(payload []byte) claudeCodeHelperShape {
+	if matchesClaudeCodeSDKTitleBody(payload) {
+		return claudeCodeHelperShapeTitleSDK
+	}
 	minimalKeys := []string{"model", "max_tokens", "messages", "metadata"}
 	structuredKeys := []string{"model", "messages", "system", "tools", "metadata", "max_tokens", "thinking", "temperature", "output_config", "stream"}
 	structuredTitle280Keys := []string{"model", "max_tokens", "messages", "metadata", "output_config"}

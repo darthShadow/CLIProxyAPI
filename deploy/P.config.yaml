@@ -40,6 +40,15 @@ claude-header-defaults:
   user-agent: "claude-cli/2.1.295 (external, cli)"
 codex:
   refuse-exhausted-included-usage: true
+  # Stays off: the relay binds WebRTC UDP ports on every interface. Only the
+  # user turns it on, and only after testing it.
+  live-media-relay:
+    enabled: false
+# Stays off: discovery multicasts mDNS records under this host's name on the
+# LAN, and macOS renames the host when it sees that claim. Only the user turns
+# it on, and only after testing it.
+discovery:
+  enabled: false
 routing:
   # New sessions start on the account whose weekly allowance resets soonest;
   # a running session never moves (session-affinity-hold).

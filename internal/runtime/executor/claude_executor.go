@@ -190,13 +190,14 @@ const claudeUnconfirmedClientBody = `{"type":"error","error":{"type":"invalid_re
 
 // refuseUnconfirmedClaudeRequest returns a request-scoped 400 when the refusal
 // switch is on and the request is not confirmed native Claude Code whose
-// User-Agent version equals the configured baseline. The caller returns the
-// error before any upstream send.
+// User-Agent version equals the configured baseline, or comes from the
+// claude-vscode entrypoint, which no fixture has captured. The caller returns
+// the error before any upstream send.
 func refuseUnconfirmedClaudeRequest(cfg *config.Config, detection helps.ClaudeCodeRequestDetection, incomingHeaders http.Header) error {
 	if cfg == nil || !cfg.ClaudeCode.RefuseUnconfirmedClients {
 		return nil
 	}
-	if detection.Confirmed && helps.ClaudeCodeUserAgentMatchesBaseline(helps.HeaderValueCaseInsensitive(incomingHeaders, "User-Agent"), cfg) {
+	if detection.Confirmed && detection.Entrypoint != "claude-vscode" && helps.ClaudeCodeUserAgentMatchesBaseline(helps.HeaderValueCaseInsensitive(incomingHeaders, "User-Agent"), cfg) {
 		return nil
 	}
 	return claudeEntitlementError{statusErr{code: http.StatusBadRequest, msg: claudeUnconfirmedClientBody}}

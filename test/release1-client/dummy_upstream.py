@@ -19,6 +19,8 @@ nothing. FIXTURE_MODE selects the answer:
   permprobe          a main-thread Anthropic request that offers Bash gets one Bash
                      tool_use per command in FIXTURE_PERM_COMMANDS (separated by
                      "|"), one per turn, then "ok"
+  cron               the first main-thread Anthropic request that offers CronCreate with
+                     "cron" and "prompt" fields gets one CronCreate for the next minute
 Usage: dummy_upstream.py <record-file> <port>
 """
 import http.server
@@ -75,6 +77,7 @@ def chatgpt_tool_stream(model, name, n):
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     agent_sent = False
+    cron_sent = False
     gpt_tools_sent = 0
 
     def log_message(self, *args):
@@ -126,6 +129,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if tool:
                 Handler.agent_sent = True
                 use = {"type": "tool_use", "id": "toolu_fixture", "name": tool, "input": {"description": "fixture", "prompt": "Reply with ok.", "subagent_type": os.environ.get("FIXTURE_SUBAGENT_TYPE", "general-purpose")}}
+                return self.tool_use_reply(model, payload, use)
+        if MODE == "cron" and not chatgpt and not Handler.cron_sent:
+            tool = next((t for t in payload.get("tools", []) if t.get("name") == "CronCreate"), None)
+            fields = set(((tool or {}).get("input_schema") or {}).get("properties", {}))
+            if {"cron", "prompt"} <= fields:
+                Handler.cron_sent = True
+                schedule = {"cron": "* * * * *", "prompt": "Reply with ok."}
+                if "recurring" in fields:
+                    schedule["recurring"] = False
+                use = {"type": "tool_use", "id": "toolu_cron", "name": "CronCreate", "input": schedule}
                 return self.tool_use_reply(model, payload, use)
         if MODE == "permprobe" and not chatgpt and any(t.get("name") == "Bash" for t in payload.get("tools", [])):
             commands = [c for c in os.environ.get("FIXTURE_PERM_COMMANDS", "").split("|") if c]

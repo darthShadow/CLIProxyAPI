@@ -23,7 +23,8 @@ check_direct "$CPA_PORT" P
 sed -e "s/port: $CPA_PORT/port: $W_PORT/" -e "s#http://127.0.0.1:$DUMMY_PORT/v1#http://127.0.0.1:$CPA_PORT/v1#" \
 	-e "s#base-url: \"http://127.0.0.1:$DUMMY_PORT\"#base-url: \"http://127.0.0.1:$CPA_PORT\"#" \
 	-e 's/fixture-upstream-key/fixture-proxy-key/' "$ROOT/cpa.yaml" >"$ROOT/w.yaml"
-"$ROOT/cpa" -config "$ROOT/w.yaml" -local-model >"$ROOT/w.log" 2>&1 &
+HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 NO_PROXY=127.0.0.1,localhost \
+	"$ROOT/cpa" -config "$ROOT/w.yaml" -local-model >"$ROOT/w.log" 2>&1 &
 PIDS+=("$!"); sleep 2
 check_direct "$W_PORT" W
 sends=$(records "$ROOT/upstream.jsonl" 'r["path"].endswith("/responses")' | grep -c True || true)

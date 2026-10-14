@@ -37,36 +37,61 @@ var (
 	cachedXAIClientVersion = DefaultXAIFallbackClientVersion
 	xaiVersionProxyURL     string
 	xaiClientVersionMu     sync.RWMutex
+	xaiUpdaterContext      context.Context
 	xaiUpdaterCancel       context.CancelFunc
 	xaiVersionRefreshed    chan struct{}
 )
 
 // GetXAIClientVersion returns the current Grok CLI client version.
+// Its first read after arming starts the background updater without waiting for a fetch.
 // If the background updater has fetched a newer acceptable version from npm, it returns that version;
 // otherwise it returns DefaultXAIFallbackClientVersion.
 func GetXAIClientVersion() string {
-	xaiClientVersionMu.RLock()
-	defer xaiClientVersionMu.RUnlock()
+	xaiClientVersionMu.Lock()
+	defer xaiClientVersionMu.Unlock()
+	if xaiUpdaterContext != nil && xaiUpdaterCancel == nil {
+		startXAIVersionUpdaterLocked(xaiUpdaterContext, xaiVersionProxyURL)
+	}
 	return cachedXAIClientVersion
+}
+
+// ArmXAIVersionUpdater records the service context and proxy URL for the first version read.
+// If the updater has already started, it rebinds to the new context and proxy URL immediately.
+// A nil context uses context.Background.
+func ArmXAIVersionUpdater(ctx context.Context, proxyURL string) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	xaiClientVersionMu.Lock()
+	defer xaiClientVersionMu.Unlock()
+	xaiUpdaterContext = ctx
+	xaiVersionProxyURL = strings.TrimSpace(proxyURL)
+	if xaiUpdaterCancel != nil {
+		startXAIVersionUpdaterLocked(ctx, proxyURL)
+	}
 }
 
 // StartXAIVersionUpdater starts a background goroutine that periodically refreshes the Grok CLI version from npm.
 // A later call cancels the previous goroutine and binds the new service context and proxy URL.
 // It executes a single fetch on startup and then polls every 3 hours without multiple retries on failure.
 func StartXAIVersionUpdater(ctx context.Context, proxyURL string) {
+	xaiClientVersionMu.Lock()
+	defer xaiClientVersionMu.Unlock()
+	startXAIVersionUpdaterLocked(ctx, proxyURL)
+}
+
+// startXAIVersionUpdaterLocked requires xaiClientVersionMu to be held for writing.
+func startXAIVersionUpdaterLocked(ctx context.Context, proxyURL string) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 
-	xaiClientVersionMu.Lock()
 	if xaiUpdaterCancel != nil {
 		xaiUpdaterCancel()
 	}
 	xaiUpdaterCancel = cancel
 	xaiVersionProxyURL = strings.TrimSpace(proxyURL)
-	xaiClientVersionMu.Unlock()
-
 	go runXAIVersionUpdater(runCtx)
 }
 

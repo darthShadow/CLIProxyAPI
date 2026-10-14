@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -149,5 +151,135 @@ func TestFetchAntigravityLatestVersionReturnsHubManifestError(t *testing.T) {
 	_, errFetch := fetchAntigravityLatestVersion(context.Background())
 	if errFetch == nil {
 		t.Fatal("fetchAntigravityLatestVersion() error = nil, want error")
+	}
+}
+
+func TestAntigravityVersionUpdaterStartsOnFirstRead(t *testing.T) {
+	var requests atomic.Int32
+	requested := make(chan struct{}, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		select {
+		case requested <- struct{}{}:
+		default:
+		}
+		_, _ = w.Write([]byte("version: 2.9.2\n"))
+	}))
+	defer server.Close()
+	restoreURL := overrideAntigravityVersionURLsForTest(t, server.URL)
+	defer restoreURL()
+	restoreVersion := overrideAntigravityVersionCacheForTest(t, "", time.Time{})
+	defer restoreVersion()
+
+	antigravityVersionMu.Lock()
+	oldContext, oldStarted := antigravityUpdaterContext, antigravityUpdaterStarted
+	antigravityUpdaterContext, antigravityUpdaterStarted = nil, false
+	antigravityVersionMu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		antigravityVersionMu.Lock()
+		antigravityUpdaterContext, antigravityUpdaterStarted = oldContext, oldStarted
+		antigravityVersionMu.Unlock()
+	}()
+
+	ArmAntigravityVersionUpdater(ctx)
+	antigravityVersionMu.RLock()
+	started := antigravityUpdaterStarted
+	antigravityVersionMu.RUnlock()
+	if started {
+		t.Fatalf("antigravityUpdaterStarted after arming = %t, want false", started)
+	}
+	select {
+	case <-requested:
+		t.Fatalf("requests after arming = %d, want 0", requests.Load())
+	case <-time.After(50 * time.Millisecond):
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("requests after arming = %d, want 0", got)
+	}
+
+	AntigravityLatestVersion()
+	select {
+	case <-requested:
+	case <-t.Context().Done():
+		t.Fatal("requests after first read = 0, want 1")
+	}
+	// Wait for the cache write before restoring package state.
+	for AntigravityLatestVersion() != "2.9.2" {
+		select {
+		case <-t.Context().Done():
+			t.Fatalf("AntigravityLatestVersion() = %q, want %q", AntigravityLatestVersion(), "2.9.2")
+		default:
+			runtime.Gosched()
+		}
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("requests after first read = %d, want 1", got)
+	}
+	ArmAntigravityVersionUpdater(ctx)
+	antigravityVersionMu.RLock()
+	started = antigravityUpdaterStarted
+	antigravityVersionMu.RUnlock()
+	if !started {
+		t.Fatalf("antigravityUpdaterStarted after rearming = %t, want true", started)
+	}
+	AntigravityLatestVersion()
+	select {
+	case <-requested:
+		t.Fatalf("requests after another arm and read = %d, want 1", requests.Load())
+	case <-time.After(50 * time.Millisecond):
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("requests after another arm and read = %d, want 1", got)
+	}
+}
+
+func TestAntigravityLatestVersionUnarmedReadMakesNoRequest(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte("version: 2.9.2\n"))
+	}))
+	defer server.Close()
+	restoreURL := overrideAntigravityVersionURLsForTest(t, server.URL)
+	defer restoreURL()
+
+	antigravityVersionMu.Lock()
+	oldContext, oldStarted := antigravityUpdaterContext, antigravityUpdaterStarted
+	antigravityUpdaterContext, antigravityUpdaterStarted = nil, false
+	antigravityVersionMu.Unlock()
+	defer func() {
+		antigravityVersionMu.Lock()
+		antigravityUpdaterContext, antigravityUpdaterStarted = oldContext, oldStarted
+		antigravityVersionMu.Unlock()
+	}()
+
+	for _, tc := range []struct {
+		name    string
+		version string
+		expiry  time.Time
+		want    string
+	}{
+		{name: "fallback", want: antigravityFallbackVersion},
+		{name: "cached", version: "2.9.0", expiry: time.Now().Add(time.Hour), want: "2.9.0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			restoreVersion := overrideAntigravityVersionCacheForTest(t, tc.version, tc.expiry)
+			defer restoreVersion()
+			if got := AntigravityLatestVersion(); got != tc.want {
+				t.Fatalf("unarmed AntigravityLatestVersion() = %q, want %q", got, tc.want)
+			}
+			antigravityVersionMu.RLock()
+			started := antigravityUpdaterStarted
+			antigravityVersionMu.RUnlock()
+			if started {
+				t.Fatalf("antigravityUpdaterStarted after unarmed read = %t, want false", started)
+			}
+		})
+	}
+	<-time.After(50 * time.Millisecond)
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("requests after unarmed reads = %d, want 0", got)
 	}
 }

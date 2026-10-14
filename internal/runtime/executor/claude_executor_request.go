@@ -1197,6 +1197,10 @@ func applyClaudeHeadersWithNativeProfile(
 				includeExtendedCacheTTL := helps.ClaudePayloadHas1hTTL(body) && !helps.IsClaudeProbeOrHelperRequest(body)
 				baseBetas = withClaudeOAuthCredentialBetas(baseBetas, includeExtendedCacheTTL)
 			}
+		} else if useOAuthBetas {
+			// A helper that reached the proxy with the proxy's own key, such as the
+			// Agent SDK session title, has no OAuth beta; the OAuth credential needs it.
+			baseBetas = withClaudeOAuthCredentialBetas(baseBetas, false)
 		}
 	} else if preserveCallerFingerprint && useOAuthBetas {
 		if countTokens {
@@ -1208,7 +1212,11 @@ func applyClaudeHeadersWithNativeProfile(
 	if preserveCallerFingerprint && advisorNeeded {
 		baseBetas = withClaudeAdvisorToolBeta(baseBetas)
 	}
-	if !claudeRequestSupportsEffort(body, nil) {
+	// A confirmed native client decides effort support itself: Claude Code
+	// 2.1.295 sends effort-2025-11-24 on its Haiku 5.5 session title, a body that
+	// claudeRequestSupportsEffort rejects as a Haiku model and as a helper.
+	keepClientEffort := confirmedClaudeCode && claudeRequestedBetas(incomingBetas, nil)[claudeEffortBeta]
+	if !keepClientEffort && !claudeRequestSupportsEffort(body, nil) {
 		baseBetas = withoutClaudeBeta(baseBetas, claudeEffortBeta)
 	}
 	existingSet := make(map[string]bool)
@@ -1267,7 +1275,7 @@ func applyClaudeHeadersWithNativeProfile(
 	}
 	applyBetaHeader := func() {
 		// Enforce strict native Claude Code 2.1.280 model & turn beta gating:
-		if !claudeRequestSupportsEffort(body, nil) {
+		if !keepClientEffort && !claudeRequestSupportsEffort(body, nil) {
 			baseBetas = withoutClaudeBeta(baseBetas, claudeEffortBeta)
 		}
 		reqProbeOrHelper := helps.IsClaudeProbeOrHelperRequest(body)

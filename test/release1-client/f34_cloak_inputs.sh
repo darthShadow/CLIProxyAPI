@@ -18,7 +18,8 @@ text = text.replace('''    base-url: "http://127.0.0.1:''', '''    cloak:
 open(path, "w").write(text)
 PY
 kill "${PIDS[1]}"; sleep 1
-"$ROOT/cpa" -config "$ROOT/cpa.yaml" -local-model >"$ROOT/cpa2.log" 2>&1 &
+HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 NO_PROXY=127.0.0.1,localhost \
+	"$ROOT/cpa" -config "$ROOT/cpa.yaml" -local-model >"$ROOT/cpa2.log" 2>&1 &
 PIDS+=("$!"); sleep 2
 run_claude -p "Reply ok." --max-turns 1
 before=$(wc -l <"$ROOT/upstream.jsonl")
