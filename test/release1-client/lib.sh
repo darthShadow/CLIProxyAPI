@@ -19,11 +19,11 @@ fixture_init() {
 	test -z "$(ls -A "$ROOT/config")" || { echo "STOP: config dir not new"; exit 2; }
 	trap fixture_stop EXIT
 	cat >"$ROOT/config/settings.json" <<JSON
-{"model":"opus","env":{"CLAUDE_CODE_ATTRIBUTION_HEADER":"0","ANTHROPIC_DEFAULT_OPUS_MODEL":"claude-opus-5-5[1m]","ANTHROPIC_DEFAULT_SONNET_MODEL":"claude-sonnet-5-5[1m]","ANTHROPIC_DEFAULT_HAIKU_MODEL":"claude-haiku-5-5[1m]","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"384000","DISABLE_AUTO_COMPACT":"1","CLAUDE_CODE_MAX_OUTPUT_TOKENS":"64000","DISABLE_AUTOUPDATER":"1","X_FIXTURE_SHARED":"kept"}}
+{"model":"opus","env":{"CLAUDE_CODE_ATTRIBUTION_HEADER":"0","ANTHROPIC_DEFAULT_OPUS_MODEL":"claude-opus-5-5[1m]","ANTHROPIC_DEFAULT_SONNET_MODEL":"claude-sonnet-5-5[1m]","ANTHROPIC_DEFAULT_HAIKU_MODEL":"claude-haiku-5-5[1m]","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"433000","DISABLE_AUTO_COMPACT":"1","CLAUDE_CODE_MAX_OUTPUT_TOKENS":"64000","DISABLE_AUTOUPDATER":"1","X_FIXTURE_SHARED":"kept"}}
 JSON
 	# The proxy overlay as cc-switch generates it from proxy-settings.json.
 	cat >"$ROOT/overlay.json" <<JSON
-{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:$RELAY_PORT","ANTHROPIC_AUTH_TOKEN":"fixture-proxy-key","CLAUDE_CODE_PROMPT_CACHE_TTL":"1h","CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL":"5m","ENABLE_TOOL_SEARCH":"auto","CLAUDE_CODE_GATEWAY_HINT_HEADERS":"1","CLAUDE_CODE_MAX_CONTEXT_TOKENS":"268000","DISABLE_AUTO_COMPACT":"0"},"autoCompactEnabled":true}
+{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:$RELAY_PORT","ANTHROPIC_AUTH_TOKEN":"fixture-proxy-key","CLAUDE_CODE_PROMPT_CACHE_TTL":"1h","CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL":"5m","ENABLE_TOOL_SEARCH":"auto","CLAUDE_CODE_GATEWAY_HINT_HEADERS":"1","CLAUDE_CODE_MAX_CONTEXT_TOKENS":"433000","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"1000000","DISABLE_AUTO_COMPACT":"0"},"autoCompactEnabled":true}
 JSON
 	# The scratch proxy admits exactly the version of the binary under test.
 	CLAUDE_VERSION="$(env -i PATH="$PATH" HOME="$ROOT/home" CLAUDE_CONFIG_DIR="$ROOT/config" "$CLAUDE_BIN" --version | awk '{print $1}')"

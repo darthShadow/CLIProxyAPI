@@ -15,8 +15,8 @@
 # (@anthropic-ai/claude-agent-sdk@0.3.290). Each tarball's sha512 must equal
 # npm view <package>@<version> dist.integrity. The packed package/claude and
 # the <current claude binary> argument must have the sha256 recorded when that
-# version was pinned (2.1.299:
-# ba5ab7b8c195fa03ab8d5bf3915c76153b576a2c40e79a5c46e265e7ed9744b3), and the
+# version was pinned (2.1.300:
+# 475517caa611e3318a2f298fa071287ec98955538df78c58f709ecc01e5ae2d3), and the
 # packed package/sdk.mjs must equal SDK_DIR/sdk.mjs.
 #
 # CPA_BIN_OLD (optional) is the proxy build of the current pair for the old
