@@ -50,8 +50,11 @@ codex:
 discovery:
   enabled: false
 routing:
-  # New sessions start on the account whose weekly allowance resets soonest;
-  # a running session never moves (session-affinity-hold).
+  # New sessions start on the account with the most weekly allowance left per
+  # hour until its weekly reset (under 5 hours counts as 5), skipping a Claude
+  # account whose 5-hour window is 90 percent used while another is not. The
+  # share left is multiplied by the top-level integer "weight" in each login
+  # file (absent = 1). A running session never moves (session-affinity-hold).
   strategy: "soonest-reset"
   session-affinity: true
   session-affinity-ttl: "1h"
