@@ -29,7 +29,8 @@ import sys
 
 REFUSAL = "client is not confirmed as native claude code"
 BILLING = "x-anthropic-billing-header:"
-FIELDS = ("user-agent", "header-names", "betas", "cache", "metadata", "billing")
+# FIELDS = ("user-agent", "header-names", "betas", "cache", "metadata", "billing")
+FIELDS = ("user-agent", "header-names", "betas", "cache", "metadata", "billing", "wire")
 OBSERVED = ("thread", "markers", "prompt-text", "tool-text")
 RUN_DIR = re.compile(r"r1-client-([A-Za-z0-9_]+)\.[A-Za-z0-9]{6}")
 MASKS = [
@@ -146,6 +147,7 @@ def facets(record):
         "cache": cache_positions(body),
         "metadata": list(user_id) if isinstance(user_id, dict) else ["<not-object>"],
         "billing": billing_fields(first),
+        "wire": record.get("wire", []),
     }
 
 
@@ -259,6 +261,7 @@ FAULTS = [
     ("class-missing", "class-missing", None, drop_target_class),
     ("thread", None, "thread", lambda rs: edit_body(target(rs), lambda b: b.__setitem__("thread", {"type": "planted"}))),
     ("prompt-text", None, "prompt-text", lambda rs: edit_body(target(rs), lambda b: b["system"][-1].__setitem__("text", b["system"][-1]["text"] + " planted"))),
+    ("wire", "wire", None, lambda rs: target(rs).__setitem__("wire", ["codec=planted"])),
 ]
 
 

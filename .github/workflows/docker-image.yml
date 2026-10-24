@@ -1,9 +1,12 @@
 name: docker-image
 
+# Fork: never runs on a tag. It pushes to the upstream DockerHub repository,
+# whose credentials the fork does not hold.
 on:
-  push:
-    tags:
-      - v*
+  workflow_dispatch:
+#  push:
+#    tags:
+#      - v*
 
 env:
   APP_NAME: CLIProxyAPI
