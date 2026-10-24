@@ -50,9 +50,12 @@ codex:
 discovery:
   enabled: false
 routing:
-  # New sessions start on the account whose weekly allowance resets soonest;
-  # a running session moves only at a compaction (session-affinity-hold);
-  # see the 429 note below.
+  # New sessions start on the account with the most weekly allowance left per
+  # hour until its weekly reset (under 5 hours counts as 5), skipping a Claude
+  # account whose 5-hour window is 90 percent used while another is not. The
+  # share left is multiplied by the top-level integer "weight" in each login
+  # file (absent = 1). A running session moves only at a compaction
+  # (session-affinity-hold); see the 429 note below.
   strategy: "soonest-reset"
   session-affinity: true
   session-affinity-ttl: "1h"
@@ -64,7 +67,9 @@ routing:
 # pick an account with allowance. A held session stays on its account until a
 # compaction from Claude Code moves it to an account with allowance. While such
 # an account exists, Claude Code's other requests on that session get a local 400
-# "prompt is too long" so that it compacts; count_tokens and other clients get a 429.
+# "prompt is too long" so that it compacts; count_tokens and other clients get a
+# 429. The first request after any compaction moves it too when its account rests
+# or is at 90 percent of the 5-hour window or 95 percent of the weekly window.
 oauth-request-scoped-errors:
   claude:
     - {status: 408, match-regexr: ["^"], action: "stop"}

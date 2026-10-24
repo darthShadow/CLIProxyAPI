@@ -418,3 +418,125 @@ func TestHeldSessionCodexHoldUnchanged(t *testing.T) {
 		f.refusal(f.opts("", "manual"), heldMovePlain)
 	})
 }
+
+func (f *heldMoveFixture) compacted() cliproxyexecutor.Options {
+	o := f.opts("", "")
+	o.Headers.Set("X-Claude-Code-Context-Compacted", "auto")
+	return o
+}
+func (f *heldMoveFixture) noBReset() {
+	f.signals("held-move-b", map[string]string{"Anthropic-Ratelimit-Unified-7d-Reset": ""})
+}
+func TestHeldSessionContextCompactedRepicksAtFiveHourFloor(t *testing.T) {
+	heldMovePaths(t, func(t *testing.T, path string) {
+		f := newHeldMoveFixture(t, path, "claude")
+		f.signals("held-move-a", map[string]string{"Anthropic-Ratelimit-Unified-5h-Utilization": "0.92", "Anthropic-Ratelimit-Unified-5h-Reset": unixAfter(time.Now(), time.Hour), "Anthropic-Ratelimit-Unified-7d-Utilization": "0.5", "Anthropic-Ratelimit-Unified-7d-Reset": unixAfter(time.Now(), 72*time.Hour)})
+		f.signals("held-move-b", map[string]string{"Anthropic-Ratelimit-Unified-5h-Utilization": "0.1", "Anthropic-Ratelimit-Unified-5h-Reset": unixAfter(time.Now(), time.Hour), "Anthropic-Ratelimit-Unified-7d-Utilization": "0.2", "Anthropic-Ratelimit-Unified-7d-Reset": unixAfter(time.Now(), 72*time.Hour)})
+		f.want(f.compacted(), "held-move-b")
+		f.want(f.opts("", ""), "held-move-b")
+	})
+}
+func TestHeldSessionContextCompactedBelowThresholdsStays(t *testing.T) {
+	heldMovePaths(t, func(t *testing.T, path string) {
+		f := newHeldMoveFixture(t, path, "claude")
+		f.noBReset()
+		f.signals("held-move-a", map[string]string{"Anthropic-Ratelimit-Unified-5h-Utilization": "0.89", "Anthropic-Ratelimit-Unified-5h-Reset": unixAfter(time.Now(), time.Hour), "Anthropic-Ratelimit-Unified-7d-Utilization": "0.94", "Anthropic-Ratelimit-Unified-7d-Reset": unixAfter(time.Now(), 72*time.Hour)})
+		f.want(f.compacted(), "held-move-a")
+	})
+}
+func TestHeldSessionContextCompactedWeeklyOnly(t *testing.T) {
+	heldMovePaths(t, func(t *testing.T, path string) {
+		for _, share := range []string{"0.95", "0.94"} {
+			t.Run(share, func(t *testing.T) {
+				f := newHeldMoveFixture(t, path, "claude")
+				f.noBReset()
+				f.signals("held-move-a", map[string]string{"Anthropic-Ratelimit-Unified-7d-Utilization": share, "Anthropic-Ratelimit-Unified-7d-Reset": unixAfter(time.Now(), 24*time.Hour)})
+				want := "held-move-a"
+				if share == "0.95" {
+					want = "held-move-b"
+				}
+				f.want(f.compacted(), want)
+			})
+		}
+	})
+}
+func TestHeldSessionContextCompactedStaleSnapshotStays(t *testing.T) {
+	heldMovePaths(t, func(t *testing.T, path string) {
+		for _, window := range []string{"5h", "7d"} {
+			t.Run(window, func(t *testing.T) {
+				f := newHeldMoveFixture(t, path, "claude")
+				f.noBReset()
+				signals := map[string]string{"Anthropic-Ratelimit-Unified-7d-Utilization": "0.5", "Anthropic-Ratelimit-Unified-7d-Reset": unixAfter(time.Now(), 72*time.Hour), "Anthropic-Ratelimit-Unified-5h-Utilization": "0.95", "Anthropic-Ratelimit-Unified-5h-Reset": unixAfter(time.Now(), -time.Minute)}
+				if window == "7d" {
+					signals = map[string]string{"Anthropic-Ratelimit-Unified-7d-Utilization": "0.97", "Anthropic-Ratelimit-Unified-7d-Reset": unixAfter(time.Now(), -time.Minute)}
+				}
+				f.signals("held-move-a", signals)
+				f.want(f.compacted(), "held-move-a")
+			})
+		}
+	})
+}
+func TestHeldSessionCompactionNearLimitRunsOnBound(t *testing.T) {
+	heldMovePaths(t, func(t *testing.T, path string) {
+		f := newHeldMoveFixture(t, path, "claude")
+		f.noBReset()
+		f.signals("held-move-a", map[string]string{"Anthropic-Ratelimit-Unified-5h-Utilization": "0.95", "Anthropic-Ratelimit-Unified-5h-Reset": unixAfter(time.Now(), time.Hour)})
+		o := f.compacted()
+		o.Headers.Set("X-Claude-Code-Compaction", "auto")
+		f.want(o, "held-move-a")
+	})
+}
+func TestHeldSessionContextCompactedAfterPlanRestRepicks(t *testing.T) {
+	heldMovePaths(t, func(t *testing.T, path string) {
+		for _, snapshot := range []bool{true, false} {
+			name := "without-snapshot"
+			if snapshot {
+				name = "with-snapshot"
+			}
+			t.Run(name, func(t *testing.T) {
+				f := newHeldMoveFixture(t, path, "claude")
+				f.noBReset()
+				if snapshot {
+					f.signals("held-move-a", map[string]string{"Anthropic-Ratelimit-Unified-5h-Utilization": "0.92", "Anthropic-Ratelimit-Unified-5h-Reset": unixAfter(time.Now(), time.Hour)})
+				}
+				f.rest("held-move-a", true)
+				f.want(f.compacted(), "held-move-b")
+			})
+		}
+	})
+}
+func TestHeldSessionContextCompactedFailsClosed(t *testing.T) {
+	heldMovePaths(t, func(t *testing.T, path string) {
+		for _, name := range []string{"a", "b", "c", "d", "e"} {
+			t.Run(name, func(t *testing.T) {
+				f := newHeldMoveFixture(t, path, "claude")
+				f.noBReset()
+				o := f.compacted()
+				if name == "a" || name == "b" || name == "e" {
+					f.signals("held-move-a", map[string]string{"Anthropic-Ratelimit-Unified-5h-Utilization": "0.92", "Anthropic-Ratelimit-Unified-5h-Reset": unixAfter(time.Now(), time.Hour)})
+				}
+				switch name {
+				case "a":
+					f.manager.RegisterExecutor(confirmingClaudeExecutor{heldPoolExecutor: heldPoolExecutor{"claude"}, confirm: false})
+				case "b":
+					o.OriginalRequest = nil
+				case "c":
+					f.manager.RegisterExecutor(confirmingClaudeExecutor{heldPoolExecutor: heldPoolExecutor{"claude"}, confirm: false})
+					f.rest("held-move-a", true)
+				case "d":
+					f.rest("held-move-a", false)
+				case "e":
+					o.Headers.Set("X-Claude-Code-Context-Compacted", "false")
+				}
+				switch name {
+				case "c":
+					f.refusal(o, heldMoveHint)
+				case "d":
+					f.refusal(o, heldMovePlain)
+				default:
+					f.want(o, "held-move-a")
+				}
+			})
+		}
+	})
+}

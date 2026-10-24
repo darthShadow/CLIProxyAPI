@@ -1056,7 +1056,9 @@ type SessionAffinityConfig struct {
 	// request moves it off a credential that rests on a plan limit. While another
 	// credential is available, other confirmed Claude Code requests on that session,
 	// except count_tokens, get a local 400 prompt-too-long error so that Claude Code
-	// compacts.
+	// compacts. The first confirmed request after a compaction also re-picks when
+	// the credential rests on a plan limit or is at or above 90 percent of its
+	// 5-hour window or 95 percent of its weekly window.
 	Hold bool
 }
 
@@ -1237,6 +1239,11 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 	}
 
 	if cachedAuthID, ok := s.cache.GetAndRefresh(cacheKey); ok {
+		if moved := s.heldSessionRepick(ctx, provider, model, opts, available, fallbackAuths, cachedAuthID, now); moved != nil {
+			bind(moved.ID, true)
+			entry.Infof("session-affinity: held session re-picked after a compaction near the plan limit | session=%s bound_auth=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), cachedAuthID, moved.ID, provider, model)
+			return moved, nil
+		}
 		for _, auth := range available {
 			if auth.ID == cachedAuthID {
 				bind(auth.ID, true)

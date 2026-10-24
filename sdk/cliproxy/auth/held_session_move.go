@@ -18,9 +18,10 @@ type NativeClaudeCodeConfirmer interface {
 }
 
 type heldSessionMove struct {
-	planLimited map[string]struct{}
-	compaction  bool
-	confirmer   NativeClaudeCodeConfirmer
+	planLimited      map[string]struct{}
+	compaction       bool
+	contextCompacted bool
+	confirmer        NativeClaudeCodeConfirmer
 }
 
 type heldSessionMoveContextKey struct{}
@@ -61,10 +62,21 @@ func (m *Manager) heldSessionMoveLocked(selector Selector, candidates []*Auth, n
 	return move
 }
 
+func validCompactionKind(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "auto", "manual", "reactive":
+		return true
+	default:
+		return false
+	}
+}
+
 func (h heldSessionMove) confirmHints(ctx context.Context, opts cliproxyexecutor.Options) heldSessionMove {
-	compaction := strings.TrimSpace(opts.Headers.Get("X-Claude-Code-Compaction"))
-	if (compaction == "auto" || compaction == "manual" || compaction == "reactive") && len(opts.OriginalRequest) > 0 && h.confirmer != nil && h.confirmer.ConfirmsNativeClaudeCode(ctx, opts.Headers, opts.OriginalRequest) {
-		h.compaction = true
+	compaction := validCompactionKind(opts.Headers.Get("X-Claude-Code-Compaction"))
+	contextCompacted := validCompactionKind(opts.Headers.Get("X-Claude-Code-Context-Compacted"))
+	if (compaction || contextCompacted) && len(opts.OriginalRequest) > 0 && h.confirmer != nil && h.confirmer.ConfirmsNativeClaudeCode(ctx, opts.Headers, opts.OriginalRequest) {
+		h.compaction = compaction
+		h.contextCompacted = contextCompacted
 	}
 	return h
 }
@@ -72,7 +84,7 @@ func (h heldSessionMove) confirmHints(ctx context.Context, opts cliproxyexecutor
 func heldSessionRefusal(ctx context.Context, authID string, opts cliproxyexecutor.Options) error {
 	h := heldSessionMoveFromContext(ctx)
 	if _, limited := h.planLimited[authID]; limited {
-		if h.compaction {
+		if h.compaction || h.contextCompacted {
 			return nil
 		}
 		count, _ := ctx.Value(heldSessionCountContextKey{}).(bool)
@@ -106,13 +118,40 @@ func (m *Manager) heldSessionDiscoveryRefusal(ctx context.Context, providers []s
 	if !hold {
 		return nil
 	}
-	switch strings.TrimSpace(opts.Headers.Get("X-Claude-Code-Compaction")) {
-	case "auto", "manual", "reactive":
+	if validCompactionKind(opts.Headers.Get("X-Claude-Code-Compaction")) {
 		return nil
 	}
 	_, _, _, pickedErr := m.pickNextMixed(ctx, providers, model, opts, nil)
 	if isHeldSessionPromptTooLong(pickedErr) {
 		return pickedErr
+	}
+	return nil
+}
+
+const heldSessionWeeklyFloor = 95
+
+func nearPlanLimit(q QuotaState, now time.Time) bool {
+	used, reset, _, ok := WeeklyQuota(q)
+	return fiveHourSpent(q, now) || (ok && used >= heldSessionWeeklyFloor && reset.After(now))
+}
+
+func (s *SessionAffinitySelector) heldSessionRepick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, available, fallbackAuths []*Auth, boundID string, now time.Time) *Auth {
+	h := heldSessionMoveFromContext(ctx)
+	if !s.hold || !h.contextCompacted || h.compaction {
+		return nil
+	}
+	for _, bound := range available {
+		if bound.ID != boundID {
+			continue
+		}
+		if !nearPlanLimit(bound.Quota, now) {
+			return nil
+		}
+		auth, err := s.fallback.Pick(ctx, provider, model, opts, fallbackAuths)
+		if err == nil && auth != nil && auth.ID != boundID {
+			return auth
+		}
+		return nil
 	}
 	return nil
 }
