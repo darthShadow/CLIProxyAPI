@@ -122,6 +122,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		AuthType:  authType,
 		AuthValue: authValue,
 	})
+	helps.ApplyCodexRequestZstd(httpReq)
 
 	httpClient := helps.NewUtlsHTTPClient(ctx, e.cfg, auth, 0)
 	httpClient = reporter.TrackHTTPClientRoundTripOnly(httpClient)

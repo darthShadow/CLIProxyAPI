@@ -301,6 +301,16 @@ func TestClaudeCodeTransportKeepsIdleConnections(t *testing.T) {
 	}
 }
 
+func TestUtlsHTTP2TransportPingsIdleConnections(t *testing.T) {
+	transport := newUtlsHTTP2Transport()
+	if transport.ReadIdleTimeout != 15*time.Second {
+		t.Errorf("ReadIdleTimeout = %s, want 15s", transport.ReadIdleTimeout)
+	}
+	if transport.PingTimeout != 15*time.Second {
+		t.Errorf("PingTimeout = %s, want 15s", transport.PingTimeout)
+	}
+}
+
 func TestClaudeCodeTLSResumptionIsWireSafe(t *testing.T) {
 	t.Parallel()
 
