@@ -755,7 +755,9 @@ func main() {
 			if standalone {
 				// Standalone mode: start an embedded local server and connect TUI client to it.
 				managementasset.StartAutoUpdater(context.Background(), configFilePath)
-				misc.StartAntigravityVersionUpdater(context.Background())
+				// The version reader now starts the check on first use.
+				// misc.StartAntigravityVersionUpdater(context.Background())
+				misc.ArmAntigravityVersionUpdater(context.Background())
 				registry.SetLocalModelCatalogs(localModel)
 				hook := tui.NewLogHook(2000)
 				hook.SetFormatter(&logging.LogFormatter{})
@@ -830,7 +832,9 @@ func main() {
 		} else {
 			// Start the main proxy service
 			managementasset.StartAutoUpdater(context.Background(), configFilePath)
-			misc.StartAntigravityVersionUpdater(context.Background())
+			// The version reader now starts the check on first use.
+			// misc.StartAntigravityVersionUpdater(context.Background())
+			misc.ArmAntigravityVersionUpdater(context.Background())
 			registry.SetLocalModelCatalogs(localModel)
 			cmd.StartServiceWithPluginHost(cfg, configFilePath, password, pluginHost, serverOptions...)
 		}

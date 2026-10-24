@@ -1079,18 +1079,45 @@ func TestHandleAuthUpdates_SameRevisionWaitDoesNotWaitForOtherAuthInBatch(t *tes
 		t.Fatal("second auth registration in batch did not start")
 	}
 
+	// The batch workers reach the hook in either order, so the blocked
+	// registration may be A's or B's. Wait on both auths: the one whose
+	// registration is not blocked must return while the other stays blocked.
 	doneA := make(chan struct{})
+	doneB := make(chan struct{})
 	go func() {
 		service.handleAuthUpdate(context.Background(), updateA)
 		close(doneA)
 	}()
+	go func() {
+		service.handleAuthUpdate(context.Background(), updateB)
+		close(doneB)
+	}()
+	var blockedDone chan struct{}
+	var returnedID, blockedID string
 	select {
 	case <-doneA:
+		blockedDone, returnedID, blockedID = doneB, authAID, authBID
+	case <-doneB:
+		blockedDone, returnedID, blockedID = doneA, authBID, authAID
 	case <-time.After(2 * time.Second):
-		t.Fatal("auth A hook wait blocked on unrelated auth B registration")
+		// t.Fatal("auth A hook wait blocked on unrelated auth B registration")
+		t.Fatal("same-revision hook wait blocked on the unrelated auth registration in the batch")
+	}
+	// A task registers its models before its wait finishes, and the blocked
+	// task is parked in the hook before it registers anything.
+	if got := len(reg.GetModelsForClient(returnedID)); got == 0 {
+		t.Fatalf("wait for %s returned before its registration finished", returnedID)
+	}
+	if got := len(reg.GetModelsForClient(blockedID)); got != 0 {
+		t.Fatalf("blocked auth %s registered %d models before release", blockedID, got)
 	}
 
 	close(bBlock)
+	select {
+	case <-blockedDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("same-revision hook wait for the blocked auth did not finish after release")
+	}
 	select {
 	case <-finishedBatch:
 	case <-time.After(2 * time.Second):

@@ -3,6 +3,7 @@ package auth
 import (
 	"encoding/json"
 	"errors"
+	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
@@ -28,6 +29,15 @@ func (e requestStopError) Unwrap() error {
 
 func (e requestStopError) IsRequestStop() bool {
 	return true
+}
+
+// Headers forwards the wrapped error's client headers, so a stop rule does not
+// drop them.
+func (e requestStopError) Headers() http.Header {
+	if carrier, ok := e.error.(interface{ Headers() http.Header }); ok && carrier != nil {
+		return carrier.Headers()
+	}
+	return nil
 }
 
 func isRequestStopError(err error) bool {
@@ -199,6 +209,9 @@ func matchRequestScopedErrorAction(auth *Auth, err error, cfg *internalconfig.Co
 		if rule.Status <= 0 || rule.Status != statusCode {
 			continue
 		}
+		if !requestScopedRuleScopeMatches(rule.Scope, err) {
+			continue
+		}
 		if len(rule.Match) == 0 && len(rule.MatchRegexr) == 0 {
 			continue
 		}
@@ -237,6 +250,22 @@ func matchRequestScopedErrorAction(auth *Auth, err error, cfg *internalconfig.Co
 	}
 
 	return "", false
+}
+
+// requestScopedRuleScopeMatches applies a rule's scope: "credential" matches
+// only credential-scoped errors, "model" only the others, empty both. An
+// unknown scope never matches, so a typo cannot widen a rule.
+func requestScopedRuleScopeMatches(scope string, err error) bool {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "":
+		return true
+	case "credential":
+		return isCredentialScopedError(err)
+	case "model":
+		return !isCredentialScopedError(err)
+	default:
+		return false
+	}
 }
 
 func applyRequestScopedActionToResult(action string, okAction bool, result *Result) {

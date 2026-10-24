@@ -11,6 +11,7 @@ import (
 	tls "github.com/refraction-networking/utls"
 	internalcache "github.com/router-for-me/CLIProxyAPI/v8/internal/cache"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/httpwire"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/proxyutil"
 	log "github.com/sirupsen/logrus"
@@ -250,5 +251,5 @@ func (t *utlsRoundTripper) CloseIdleConnections() {
 }
 
 func NewAnthropicHttpClient(cfg *config.SDKConfig) *http.Client {
-	return &http.Client{Transport: newUtlsRoundTripper(cfg)}
+	return &http.Client{Transport: newUtlsRoundTripper(cfg), CheckRedirect: util.RefuseRedirect}
 }

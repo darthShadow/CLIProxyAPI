@@ -144,6 +144,9 @@ func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxye
 			return resp, nil
 		}
 		if isRequestTerminatedError(errExec) || isRequestStopError(errExec) {
+			if refusal := m.heldSessionDiscoveryRefusal(ctx, normalized, retryModel, opts, errExec); refusal != nil {
+				return cliproxyexecutor.Response{}, refusal
+			}
 			return cliproxyexecutor.Response{}, unwrapExecutionBoundaryError(errExec)
 		}
 		if hasUpstreamExecutionAttempt(errExec) {
@@ -181,6 +184,7 @@ func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxye
 // It supports multiple providers for the same model and round-robins the starting provider per model.
 func (m *Manager) ExecuteCount(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	ctx = cliproxyexecutor.WithRequestProxyURL(ctx, opts.ProxyURL)
+	ctx = context.WithValue(ctx, heldSessionCountContextKey{}, true)
 	req, opts = cliproxysession.Enrich(req, opts)
 	normalized := m.normalizeProviders(providers)
 	if len(normalized) == 0 {
@@ -279,6 +283,9 @@ func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req cli
 		retryRoundPending = false
 		retryRoundWaited = false
 		if isRequestTerminatedError(errStream) || isRequestStopError(errStream) {
+			if refusal := m.heldSessionDiscoveryRefusal(ctx, normalized, retryModel, opts, errStream); refusal != nil {
+				return nil, refusal
+			}
 			return nil, unwrapExecutionBoundaryError(errStream)
 		}
 		lastErr = errStream
@@ -856,8 +863,14 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 				// count_tokens route and return a generic endpoint 404. Record
 				// the failure for hooks and metrics without suspending a model
 				// that remains usable through the messages endpoint.
-				if isCountTokensEndpointNotFoundError(errExec, execReq.Model) && (result.Error == nil || result.Error.Code != ErrorCodeForceCooldown) {
+				// A count_tokens 429 neither rests nor moves the
+				// session's account; it returns to the client.
+				countThrottled := statusCodeFromError(errExec) == http.StatusTooManyRequests
+				if countThrottled || (isCountTokensEndpointNotFoundError(errExec, execReq.Model) && (result.Error == nil || result.Error.Code != ErrorCodeForceCooldown)) {
 					m.recordAvailabilityNeutralResult(execCtx, result)
+					if countThrottled {
+						return cliproxyexecutor.Response{}, wrapRequestStopError(errExec)
+					}
 				} else {
 					if isCredentialScopedError(errExec) {
 						result.CredentialScope = true

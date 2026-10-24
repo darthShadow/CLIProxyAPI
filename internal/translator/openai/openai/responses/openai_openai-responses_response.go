@@ -636,13 +636,7 @@ func ConvertOpenAIChatCompletionsResponseToOpenAIResponses(ctx context.Context, 
 		st.FuncArgsDone = make(map[string]bool)
 		st.FuncItemDone = make(map[string]bool)
 		st.CustomToolNames = st.ToolIndex.custom
-		st.PromptTokens = 0
-		st.CachedTokens = 0
-		st.CompletionTokens = 0
-		st.TotalTokens = 0
-		st.ReasoningTokens = 0
 		st.FinishReason = ""
-		st.UsageSeen = false
 		st.CompletedEmitted = false
 		st.CompletionPending = false
 		// response.created

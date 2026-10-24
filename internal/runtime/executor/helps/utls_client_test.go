@@ -288,6 +288,19 @@ func TestClaudeCodeTLSClientHelloSpecMatches220Capture(t *testing.T) {
 	}
 }
 
+func TestClaudeCodeTransportKeepsIdleConnections(t *testing.T) {
+	transport, ok := newClaudeCodeRoundTripper("").(*http.Transport)
+	if !ok {
+		t.Fatalf("Claude Code transport type = %T, want *http.Transport", newClaudeCodeRoundTripper(""))
+	}
+	if got := transport.MaxIdleConnsPerHost; got != 32 {
+		t.Errorf("MaxIdleConnsPerHost = %d, want 32", got)
+	}
+	if got := transport.IdleConnTimeout; got != 90*time.Second {
+		t.Errorf("IdleConnTimeout = %s, want 90s", got)
+	}
+}
+
 func TestClaudeCodeTLSResumptionIsWireSafe(t *testing.T) {
 	t.Parallel()
 
