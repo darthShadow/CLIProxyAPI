@@ -45,8 +45,9 @@ func TestApplyClaudeHeaders_ConfirmedClientKeepsOAuthCredentialBetas(t *testing.
 	if len(parts) < 2 || parts[0] != claudeCodeBeta || parts[1] != claudeOAuthBeta {
 		t.Fatalf("Anthropic-Beta = %q, want %s at position 2", got, claudeOAuthBeta)
 	}
-	if parts[len(parts)-1] != claudeExtendedCacheTTLBeta {
-		t.Fatalf("Anthropic-Beta = %q, want OAuth cache trailer %s", got, claudeExtendedCacheTTLBeta)
+	// The body carries no 1-hour cache marker, so the TTL beta stays off.
+	if strings.Contains(got, claudeExtendedCacheTTLBeta) {
+		t.Fatalf("Anthropic-Beta = %q, want no %s without a 1-hour cache marker", got, claudeExtendedCacheTTLBeta)
 	}
 	if strings.Contains(got, "advisor-tool-2026-03-01") {
 		t.Fatalf("Anthropic-Beta = %q, contains unrequested advisor tool beta", got)

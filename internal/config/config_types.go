@@ -22,6 +22,11 @@ type RequestScopedErrorRule struct {
 	MatchRegexr []string `yaml:"match-regexr,omitempty" json:"match-regexr,omitempty"`
 	// Action specifies the handling behavior: "stop", "stop-and-cooldown", "continue", "continue-and-cooldown".
 	Action string `yaml:"action,omitempty" json:"action,omitempty"`
+	// Scope narrows the rule by the executor's own classification of the error:
+	// "credential" matches only credential-scoped errors (a Claude unified
+	// 5-hour or weekly rejection, a Codex usage_limit_reached), "model" matches
+	// only the others (a per-minute throttle). Empty matches both.
+	Scope string `yaml:"scope,omitempty" json:"scope,omitempty"`
 }
 
 // PluginsConfig holds dynamic plugin system settings.
@@ -269,6 +274,11 @@ type CodexConfig struct {
 	// for Codex Sign in with ChatGPT (SIWC) OAuth authorization and API requests.
 	// Defaults to "CLIProxyAPI".
 	SignInWithChatGPTIdentifier string `yaml:"signin-with-chatgpt-identifier,omitempty" json:"signin-with-chatgpt-identifier,omitempty"`
+	// RefuseExhaustedIncludedUsage refuses GPT requests on an OAuth credential
+	// while a read of the account's usage endpoint, or the latest response
+	// headers, show included usage exhausted, and while the usage is unknown,
+	// so no request can draw on purchased credits.
+	RefuseExhaustedIncludedUsage bool `yaml:"refuse-exhausted-included-usage" json:"refuse-exhausted-included-usage"`
 }
 
 // DefaultSignInWithChatGPTIdentifier is the default identifier (agent_name_hint and User-Agent prefix)
@@ -446,6 +456,11 @@ type RoutingConfig struct {
 	//     auth errors (429, 401/402/403, 404/model support, invalid_grant) rebind as normal.
 	// Ignored when SessionAffinity is false.
 	SessionAffinityRebindOn string `yaml:"session-affinity-rebind-on,omitempty" json:"session-affinity-rebind-on,omitempty"`
+	// SessionAffinityHold keeps a bound session on its credential: bindings ignore
+	// the model and name the credential provider, a session binds once under a
+	// lock, and a session whose credential is unavailable gets an error instead of
+	// a new credential. Ignored when SessionAffinity is false.
+	SessionAffinityHold bool `yaml:"session-affinity-hold,omitempty" json:"session-affinity-hold,omitempty"`
 }
 
 // OAuthModelAlias defines a model ID alias for a specific channel.

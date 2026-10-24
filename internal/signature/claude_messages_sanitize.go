@@ -17,6 +17,12 @@ type ClaudeMessagesSignatureSanitizeOptions struct {
 	// PreserveEmptyThinkingBlocks preserves compatibility-mode thinking blocks
 	// together with their original signatures, including opaque signatures.
 	PreserveEmptyThinkingBlocks bool
+	// KeepUnrecognizedClaudeThinking preserves, on confirmed native Claude Code
+	// requests, thinking blocks whose nonempty signature
+	// DetectSignatureProviderForBlock cannot attribute. That set includes Grok
+	// encrypted_content and Gemini UUID signatures, which no confirmed route
+	// produces today.
+	KeepUnrecognizedClaudeThinking bool
 }
 
 type SignatureSanitizeReport struct {
@@ -25,6 +31,7 @@ type SignatureSanitizeReport struct {
 	DroppedBlocks      int
 	DroppedSignatures  int
 	ReplacedSignatures int
+	KeptUnrecognized   int
 	Decisions          []SignatureCompatibilityDecision
 }
 
@@ -45,15 +52,30 @@ func SanitizeClaudeMessagesSignaturesForModel(payload []byte, targetModel string
 // incompatible thinking blocks are dropped, and tool_use blocks keep only their
 // tool-call payload.
 func SanitizeClaudeMessagesForClaudeUpstream(payload []byte, targetModel string, preserveEmptyThinkingBlocks ...bool) ([]byte, SignatureSanitizeReport) {
+	return SanitizeClaudeMessagesSignaturesForTarget(payload, claudeUpstreamSignatureSanitizeOptions(targetModel, preserveEmptyThinkingBlocks...))
+}
+
+// SanitizeConfirmedClaudeMessagesForClaudeUpstream prepares a confirmed native
+// Claude Code /v1/messages body for Claude-compatible upstreams. It applies the
+// same normalization and cleanup as SanitizeClaudeMessagesForClaudeUpstream,
+// but preserves thinking blocks byte for byte when their nonempty signatures
+// are unrecognized. The report counts these blocks in KeptUnrecognized.
+func SanitizeConfirmedClaudeMessagesForClaudeUpstream(payload []byte, targetModel string, preserveEmptyThinkingBlocks ...bool) ([]byte, SignatureSanitizeReport) {
+	opts := claudeUpstreamSignatureSanitizeOptions(targetModel, preserveEmptyThinkingBlocks...)
+	opts.KeepUnrecognizedClaudeThinking = true
+	return SanitizeClaudeMessagesSignaturesForTarget(payload, opts)
+}
+
+func claudeUpstreamSignatureSanitizeOptions(targetModel string, preserveEmptyThinkingBlocks ...bool) ClaudeMessagesSignatureSanitizeOptions {
 	preserveEmpty := len(preserveEmptyThinkingBlocks) > 0 && preserveEmptyThinkingBlocks[0]
-	return SanitizeClaudeMessagesSignaturesForTarget(payload, ClaudeMessagesSignatureSanitizeOptions{
+	return ClaudeMessagesSignatureSanitizeOptions{
 		TargetProvider:                SignatureProviderClaude,
 		TargetModel:                   targetModel,
 		DropEmptyMessages:             true,
 		DropToolSignatures:            true,
 		DropEmptyThinkingPlaceholders: !preserveEmpty,
 		PreserveEmptyThinkingBlocks:   preserveEmpty,
-	})
+	}
 }
 
 // SanitizeClaudeMessagesSignaturesForTarget applies provider-aware signature
@@ -160,6 +182,11 @@ func SanitizeClaudeMessagesSignaturesForTarget(payload []byte, opts ClaudeMessag
 				keptParts = append(keptParts, updated)
 				messageModified = true
 			default:
+				if opts.KeepUnrecognizedClaudeThinking && decision.DetectedProvider == SignatureProviderUnknown && strings.TrimSpace(rawSignature) != "" {
+					report.KeptUnrecognized++
+					keptParts = append(keptParts, part.Raw)
+					continue
+				}
 				report.DroppedBlocks++
 				messageModified = true
 			}

@@ -856,8 +856,14 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 				// count_tokens route and return a generic endpoint 404. Record
 				// the failure for hooks and metrics without suspending a model
 				// that remains usable through the messages endpoint.
-				if isCountTokensEndpointNotFoundError(errExec, execReq.Model) && (result.Error == nil || result.Error.Code != ErrorCodeForceCooldown) {
+				// A count_tokens 429 neither rests nor moves the
+				// session's account; it returns to the client.
+				countThrottled := statusCodeFromError(errExec) == http.StatusTooManyRequests
+				if countThrottled || (isCountTokensEndpointNotFoundError(errExec, execReq.Model) && (result.Error == nil || result.Error.Code != ErrorCodeForceCooldown)) {
 					m.recordAvailabilityNeutralResult(execCtx, result)
+					if countThrottled {
+						return cliproxyexecutor.Response{}, wrapRequestStopError(errExec)
+					}
 				} else {
 					if isCredentialScopedError(errExec) {
 						result.CredentialScope = true

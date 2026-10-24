@@ -60,7 +60,7 @@ func NewCodexAuthWithProxyURL(cfg *config.Config, proxyURL string) *CodexAuth {
 	}
 	sdkCfg.ProxyURL = effectiveProxyURL
 	return &CodexAuth{
-		httpClient:        util.SetProxy(&sdkCfg, &http.Client{}),
+		httpClient:        util.SetProxy(&sdkCfg, &http.Client{CheckRedirect: util.RefuseRedirect}),
 		siwcAgentNameHint: agentNameHint,
 	}
 }

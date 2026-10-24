@@ -3,7 +3,9 @@ package helps
 import (
 	"net/http"
 	"strings"
+	"time"
 
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	"github.com/tidwall/gjson"
 )
 
@@ -353,4 +355,33 @@ func validCodexQuotaEventIdentifier(value string) bool {
 func validCodexQuotaEventText(value string) bool {
 	value = strings.TrimSpace(value)
 	return value != "" && len(value) <= 256 && !strings.ContainsAny(value, "\r\n")
+}
+
+// CodexIncludedUsageExhausted reports whether the last observed primary or
+// secondary Codex usage window is at or above 100% and has not reset. until is
+// the latest known reset among the exhausted windows; it is zero when an
+// exhausted window carries no reset time.
+func CodexIncludedUsageExhausted(quota cliproxyauth.QuotaState, now time.Time) (until time.Time, exhausted bool) {
+	for _, window := range []string{"Primary", "Secondary"} {
+		used, ok := quota.SignalPercent("X-Codex-" + window + "-Used-Percent")
+		if !ok || used < 100 {
+			continue
+		}
+		reset := codexQuotaWindowReset(quota, window)
+		if !reset.IsZero() && !now.Before(reset) {
+			continue
+		}
+		exhausted = true
+		if reset.After(until) {
+			until = reset
+		}
+	}
+	return until, exhausted
+}
+
+func codexQuotaWindowReset(quota cliproxyauth.QuotaState, window string) time.Time {
+	if at := quota.SignalUnixTime("X-Codex-" + window + "-Reset-At"); !at.IsZero() {
+		return at
+	}
+	return quota.SignalResetAfter("X-Codex-" + window + "-Reset-After-Seconds")
 }

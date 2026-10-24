@@ -293,11 +293,30 @@ func parseClaudeRateLimitResetWithFuzz(headers http.Header, now time.Time, minFu
 		}
 	}
 
+	// A rejected window's own reset decides the rest; the
+	// unified reset applies only when no rejected window carries a future reset.
+	windowResetFound := false
+	for _, window := range []struct {
+		rejected bool
+		header   string
+	}{
+		{status5h == "rejected", "Anthropic-Ratelimit-Unified-5h-Reset"},
+		{status7d == "rejected", "Anthropic-Ratelimit-Unified-7d-Reset"},
+		{status7dOI == "rejected" && !overageOnlyRejection, "Anthropic-Ratelimit-Unified-7d_oi-Reset"},
+	} {
+		if !window.rejected {
+			continue
+		}
+		if t, ok := parseUnixOrTimestamp(getHeaderCaseInsensitive(headers, window.header)); ok && t.After(now) {
+			windowResetFound = true
+		}
+	}
+
 	// 5. Unified reset header:
 	unifiedRejected := !overageOnlyRejection && (unifiedStatus == "rejected" || status5h == "rejected" || status7d == "rejected" || status7dOI == "rejected" ||
 		(unifiedStatus == "" && !isClaudeWindowAllowed(status5h) && !isClaudeWindowAllowed(status7d)))
 
-	if unifiedRejected {
+	if unifiedRejected && !windowResetFound {
 		if raw := getHeaderCaseInsensitive(headers, "Anthropic-Ratelimit-Unified-Reset"); raw != "" {
 			if !containsString(rejectedWindows, "unified") {
 				rejectedWindows = append(rejectedWindows, "unified")

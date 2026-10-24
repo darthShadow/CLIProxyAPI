@@ -1,0 +1,112 @@
+# P: the personal proxy. It serves the cc-switch profile personal-proxy and the
+# W delegate keys. It holds only personal accounts: the personal Claude login
+# files and the ChatGPT login file, all in auth-dir. Never put the work account
+# here. Replace each REPLACE-WITH value with a random key you generate; the keys
+# live only in this file and in the matching cc-switch proxy settings file.
+host: "127.0.0.1"
+port: 8317
+auth-dir: "~/.local/share/cliproxy/P/auths"
+api-keys:
+  - "REPLACE-WITH-PERSONAL-PROXY-KEY"
+  - "REPLACE-WITH-W-DELEGATE-KEY"
+commercial-mode: false
+logging-to-file: true
+error-logs-max-files: 10
+usage-statistics-enabled: true
+# Quota dashboard: the pinned cliproxy-rs v0.3.0 management page, loopback
+# only. secret-key stays empty in this file, so the management API is off until
+# you fill your live copy with the bcrypt hash (never the key) of a management
+# key kept in your secret store. Do not start P with MANAGEMENT_PASSWORD: that
+# variable also lifts allow-remote. The page is the pinned local copy named by
+# MANAGEMENT_STATIC_PATH; disable-auto-update-panel stops every start-up and
+# periodic download.
+remote-management:
+  allow-remote: false
+  secret-key: ""
+  disable-control-panel: false
+  disable-auto-update-panel: true
+passthrough-headers: true
+request-retry: 0
+max-retry-credentials: 1
+transient-error-cooldown-seconds: -1
+disable-claude-cloak-mode: true
+disable-image-generation: "chat"
+claude-code:
+  disable-cloaking-model-list: true
+  refuse-unconfirmed-clients: true
+# The only Claude Code version tie: change it, behind the upgrade gate, when
+# Claude Code moves to a new version.
+claude-header-defaults:
+  user-agent: "claude-cli/2.1.311 (external, cli)"
+codex:
+  refuse-exhausted-included-usage: true
+  # Stays off: the relay binds WebRTC UDP ports on every interface. Only the
+  # user turns it on, and only after testing it.
+  live-media-relay:
+    enabled: false
+# Stays off: discovery multicasts mDNS records under this host's name on the
+# LAN, and macOS renames the host when it sees that claim. Only the user turns
+# it on, and only after testing it.
+discovery:
+  enabled: false
+routing:
+  # New sessions start on the account whose weekly allowance resets soonest;
+  # a running session never moves (session-affinity-hold).
+  strategy: "soonest-reset"
+  session-affinity: true
+  session-affinity-ttl: "1h"
+  session-affinity-subagents: true
+  session-affinity-hold: true
+# 429: a per-minute throttle returns to the client and the account stays usable;
+# a plan limit (Claude 5-hour or weekly rejection, Codex usage_limit_reached)
+# returns to the client and the account rests until its reset, so new sessions
+# pick an account with allowance. The session keeps its binding (hold).
+oauth-request-scoped-errors:
+  claude:
+    - {status: 408, match-regexr: ["^"], action: "stop"}
+    - {status: 429, scope: "model", match-regexr: ["^"], action: "stop"}
+    - {status: 429, scope: "credential", match-regexr: ["^"], action: "stop-and-cooldown"}
+    - {status: 500, match-regexr: ["^"], action: "stop"}
+    - {status: 501, match-regexr: ["^"], action: "stop"}
+    - {status: 502, match-regexr: ["^"], action: "stop"}
+    - {status: 503, match-regexr: ["^"], action: "stop"}
+    - {status: 504, match-regexr: ["^"], action: "stop"}
+    - {status: 520, match-regexr: ["^"], action: "stop"}
+    - {status: 521, match-regexr: ["^"], action: "stop"}
+    - {status: 522, match-regexr: ["^"], action: "stop"}
+    - {status: 523, match-regexr: ["^"], action: "stop"}
+    - {status: 524, match-regexr: ["^"], action: "stop"}
+    - {status: 525, match-regexr: ["^"], action: "stop"}
+    - {status: 526, match-regexr: ["^"], action: "stop"}
+    - {status: 529, match-regexr: ["^"], action: "stop"}
+  codex:
+    - {status: 402, match-regexr: ["^"], action: "stop"}
+    - {status: 403, match-regexr: ["^"], action: "stop"}
+    - {status: 408, match-regexr: ["^"], action: "stop"}
+    - {status: 429, scope: "model", match-regexr: ["^"], action: "stop"}
+    - {status: 429, scope: "credential", match-regexr: ["^"], action: "stop-and-cooldown"}
+    - {status: 500, match-regexr: ["^"], action: "stop"}
+    - {status: 501, match-regexr: ["^"], action: "stop"}
+    - {status: 502, match-regexr: ["^"], action: "stop"}
+    - {status: 503, match-regexr: ["^"], action: "stop"}
+    - {status: 504, match-regexr: ["^"], action: "stop"}
+    - {status: 520, match-regexr: ["^"], action: "stop"}
+    - {status: 521, match-regexr: ["^"], action: "stop"}
+    - {status: 522, match-regexr: ["^"], action: "stop"}
+    - {status: 523, match-regexr: ["^"], action: "stop"}
+    - {status: 524, match-regexr: ["^"], action: "stop"}
+    - {status: 525, match-regexr: ["^"], action: "stop"}
+    - {status: 526, match-regexr: ["^"], action: "stop"}
+    - {status: 529, match-regexr: ["^"], action: "stop"}
+payload:
+  override:
+    - models:
+        - {name: "gpt-*", protocol: "codex"}
+      params:
+        "text.verbosity": "low"
+  filter:
+    - models:
+        - {name: "gpt-*", protocol: "codex"}
+      params:
+        - "service_tier"
+        - 'tools.#(type=="image_generation")'

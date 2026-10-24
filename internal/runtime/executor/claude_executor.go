@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -77,12 +78,16 @@ func shouldSanitizeClaudeMessagesForUpstream(baseModel string) bool {
 	return sigcompat.SignatureProviderFromModelName(baseModel) == sigcompat.SignatureProviderClaude
 }
 
-func sanitizeClaudeMessagesForClaudeUpstreamWithDebug(ctx context.Context, body []byte, baseModel string, preserveEmptyThinkingBlocks ...bool) []byte {
+func sanitizeClaudeMessagesForClaudeUpstreamWithDebug(ctx context.Context, body []byte, baseModel string, confirmedClaudeCode bool, preserveEmptyThinkingBlocks ...bool) []byte {
 	sanitized := body
 	preserveEmpty := len(preserveEmptyThinkingBlocks) > 0 && preserveEmptyThinkingBlocks[0]
 	if shouldSanitizeClaudeMessagesForUpstream(baseModel) || preserveEmpty {
 		var report sigcompat.SignatureSanitizeReport
-		sanitized, report = sigcompat.SanitizeClaudeMessagesForClaudeUpstream(body, baseModel, preserveEmptyThinkingBlocks...)
+		if confirmedClaudeCode {
+			sanitized, report = sigcompat.SanitizeConfirmedClaudeMessagesForClaudeUpstream(body, baseModel, preserveEmptyThinkingBlocks...)
+		} else {
+			sanitized, report = sigcompat.SanitizeClaudeMessagesForClaudeUpstream(body, baseModel, preserveEmptyThinkingBlocks...)
+		}
 		logClaudeSignatureSanitizeReport(ctx, baseModel, report)
 	}
 	return helps.NormalizeClaudeToolCallIDs(sanitizeClaudeWebSearchDomains(sanitized))
@@ -117,7 +122,7 @@ func sanitizeClaudeWebSearchDomains(body []byte) []byte {
 }
 
 func logClaudeSignatureSanitizeReport(ctx context.Context, baseModel string, report sigcompat.SignatureSanitizeReport) {
-	if report.DroppedBlocks == 0 && report.DroppedSignatures == 0 && report.ReplacedSignatures == 0 {
+	if report.DroppedBlocks == 0 && report.DroppedSignatures == 0 && report.ReplacedSignatures == 0 && report.KeptUnrecognized == 0 {
 		return
 	}
 
@@ -131,15 +136,21 @@ func logClaudeSignatureSanitizeReport(ctx context.Context, baseModel string, rep
 		"dropped_blocks":      report.DroppedBlocks,
 		"dropped_signatures":  report.DroppedSignatures,
 		"replaced_signatures": report.ReplacedSignatures,
+		"kept_unrecognized":   report.KeptUnrecognized,
 	}
+	firstReason := ""
 	if len(report.Decisions) > 0 {
 		decision := report.Decisions[0]
 		fields["first_block_kind"] = string(decision.BlockKind)
 		fields["first_detected_provider"] = string(decision.DetectedProvider)
 		fields["first_reason"] = decision.Reason
+		firstReason = decision.Reason
 	}
 
-	helps.LogWithRequestID(ctx).WithFields(fields).Debug("claude executor: sanitized signature history before upstream")
+	// Warn makes signature history changes visible at the default Info level. The counts
+	// and first reason go in the message because LogFormatter prints only listed fields.
+	// helps.LogWithRequestID(ctx).WithFields(fields).Debug("claude executor: sanitized signature history before upstream")
+	helps.LogWithRequestID(ctx).WithFields(fields).Warnf("claude executor: sanitized signature history before upstream (dropped_blocks=%d dropped_signatures=%d replaced_signatures=%d kept_unrecognized=%d first_reason=%q)", report.DroppedBlocks, report.DroppedSignatures, report.ReplacedSignatures, report.KeptUnrecognized, firstReason)
 }
 
 // Anthropic-compatible upstreams may reject or even crash when Claude models
@@ -183,6 +194,26 @@ func stripTranslatedDefaultMaxTokens(from sdktranslator.Format, originalPayload,
 		return originalTranslated
 	}
 	return stripped
+}
+
+// claudeUnconfirmedClientBody is the local refusal returned when
+// claude-code.refuse-unconfirmed-clients is on and a request is not confirmed as
+// native Claude Code at the configured version.
+const claudeUnconfirmedClientBody = `{"type":"error","error":{"type":"invalid_request_error","message":"request refused by proxy: client is not confirmed as native Claude Code at the configured version; nothing was sent upstream"}}`
+
+// refuseUnconfirmedClaudeRequest returns a request-scoped 400 when the refusal
+// switch is on and the request is not confirmed native Claude Code whose
+// User-Agent version equals the configured baseline, or comes from the
+// claude-vscode entrypoint, which no fixture has captured. The caller returns
+// the error before any upstream send.
+func refuseUnconfirmedClaudeRequest(cfg *config.Config, detection helps.ClaudeCodeRequestDetection, incomingHeaders http.Header) error {
+	if cfg == nil || !cfg.ClaudeCode.RefuseUnconfirmedClients {
+		return nil
+	}
+	if detection.Confirmed && detection.Entrypoint != "claude-vscode" && helps.ClaudeCodeUserAgentMatchesBaseline(helps.HeaderValueCaseInsensitive(incomingHeaders, "User-Agent"), cfg) {
+		return nil
+	}
+	return claudeEntitlementError{statusErr{code: http.StatusBadRequest, msg: claudeUnconfirmedClientBody}}
 }
 
 func NewClaudeExecutor(cfg *config.Config) *ClaudeExecutor {
@@ -398,6 +429,25 @@ func (e *ClaudeExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Aut
 		ctx = req.Context()
 	}
 	httpReq := req.WithContext(ctx)
+	// A raw request passes the same refusal as Messages and count_tokens
+	// before any credential is attached or byte is sent.
+	if e.cfg != nil && e.cfg.ClaudeCode.RefuseUnconfirmedClients {
+		var body []byte
+		if httpReq.Body != nil {
+			var errRead error
+			body, errRead = io.ReadAll(httpReq.Body)
+			_ = httpReq.Body.Close()
+			if errRead != nil {
+				return nil, fmt.Errorf("claude executor: read request body: %w", errRead)
+			}
+			httpReq.Body = io.NopCloser(bytes.NewReader(body))
+		}
+		countTokens := httpReq.URL != nil && strings.Contains(httpReq.URL.Path, "count_tokens")
+		rawHeaders, rawDetection := detectIncomingClaudeCodeRequest(ctx, httpReq.Header, body, countTokens, e.cfg)
+		if errRefuse := refuseUnconfirmedClaudeRequest(e.cfg, rawDetection, rawHeaders); errRefuse != nil {
+			return nil, errRefuse
+		}
+	}
 	if err := e.PrepareRequest(httpReq, auth); err != nil {
 		return nil, err
 	}

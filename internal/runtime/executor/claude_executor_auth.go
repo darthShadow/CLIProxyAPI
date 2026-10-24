@@ -34,13 +34,16 @@ func isClaudeSetupToken(auth *cliproxyauth.Auth, apiKey string) bool {
 	if !isClaudeOAuthToken(apiKey) || auth == nil {
 		return false
 	}
-	if skip, _ := auth.Metadata["skip_account_profile"].(bool); skip {
+	// if skip, _ := auth.Metadata["skip_account_profile"].(bool); skip {
+	if skip := claudeauth.ReadMetadataBool(&auth.Metadata, "skip_account_profile"); skip {
 		return true
 	}
-	if isSetup, _ := auth.Metadata["is_setup_token"].(bool); isSetup {
+	// if isSetup, _ := auth.Metadata["is_setup_token"].(bool); isSetup {
+	if isSetup := claudeauth.ReadMetadataBool(&auth.Metadata, "is_setup_token"); isSetup {
 		return true
 	}
-	if isSetup, _ := auth.Metadata["setup_token"].(bool); isSetup {
+	// if isSetup, _ := auth.Metadata["setup_token"].(bool); isSetup {
+	if isSetup := claudeauth.ReadMetadataBool(&auth.Metadata, "setup_token"); isSetup {
 		return true
 	}
 	if kind := strings.ToLower(auth.Attributes["auth_kind"]); kind == "setup_token" || kind == "setup-token" {
@@ -60,16 +63,10 @@ func isClaudeOAuthScope403(err error) bool {
 	if err == nil {
 		return false
 	}
+	// Only an HTTP 403 from the profile endpoint itself is a
+	// scope error; transport errors and other texts persist nothing.
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "status 403") ||
-		strings.Contains(msg, "403 forbidden") ||
-		strings.Contains(msg, "403") ||
-		strings.Contains(msg, "forbidden") ||
-		strings.Contains(msg, "permission_error") ||
-		strings.Contains(msg, "scope requirement") ||
-		strings.Contains(msg, "insufficient_scope") ||
-		strings.Contains(msg, "user:profile") ||
-		strings.Contains(msg, "user:office")
+	return strings.Contains(msg, "fetch claude oauth profile failed with status 403")
 }
 
 func (e *ClaudeExecutor) PrepareRequestAuth(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {

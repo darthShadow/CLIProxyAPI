@@ -590,10 +590,16 @@ func TestMeasuredHelperProfileIgnoresConfiguredStainlessTimeout(t *testing.T) {
 	})
 }
 
-func TestDetectClaudeCodeRequestRecognizesAgentSDKHaiku55Helpers(t *testing.T) {
+func measuredClaudeCodeAgentSDKHaiku55TitleFixture() (string, []byte) {
 	encodedUserID, _ := json.Marshal(validClaudeCodeMetadataUserID)
 	titleBetas := "interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15,advisor-tool-2026-03-01,effort-2025-11-24,structured-outputs-2025-12-15,extended-cache-ttl-2025-04-11"
 	titlePayload := []byte(`{"max_tokens":1024,"messages":[{"role":"user","content":[{"type":"text","text":"name session"}]}],"metadata":{"user_id":` + string(encodedUserID) + `},"model":"claude-haiku-5-5","output_config":{"effort":"medium","format":{"type":"json_schema","schema":{"type":"object","properties":{"title":{"type":"string"}},"required":["title"],"additionalProperties":false}}},"stream":true,"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.304.c80; cc_entrypoint=sdk-ts"},{"type":"text","text":"You are a Claude agent, built on Anthropic's Claude Agent SDK."},{"type":"text","text":"You are naming a coding session so the user can pick it out of a long list of sessions."}],"tools":[]}`)
+	return titleBetas, titlePayload
+}
+
+func TestDetectClaudeCodeRequestRecognizesAgentSDKHaiku55Helpers(t *testing.T) {
+	encodedUserID, _ := json.Marshal(validClaudeCodeMetadataUserID)
+	titleBetas, titlePayload := measuredClaudeCodeAgentSDKHaiku55TitleFixture()
 
 	webSearchBetas := "interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15,advisor-tool-2026-03-01,effort-2025-11-24,dangerous-tool-use-2026-09-03,extended-cache-ttl-2025-04-11"
 	webSearchPayload := []byte(`{"max_tokens":1024,"messages":[{"role":"user","content":[{"type":"text","text":"search query"}]}],"metadata":{"user_id":` + string(encodedUserID) + `},"model":"claude-haiku-5-5","output_config":{"effort":"medium"},"stream":true,"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.304.2e0; cc_entrypoint=sdk-ts"},{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK."},{"type":"text","text":"Perform web search."}],"tool_choice":{"type":"auto"},"tools":[{"type":"web_search_20250305","name":"web_search"}]}`)
@@ -618,6 +624,41 @@ func TestDetectClaudeCodeRequestRecognizesAgentSDKHaiku55Helpers(t *testing.T) {
 			}
 			if detection.Entrypoint != "sdk-ts" || detection.Subclient != "claude-code-sdk-ts" || detection.AgentSDKVersion != "0.3.276" {
 				t.Fatalf("detection identity = %#v, want sdk-ts / claude-code-sdk-ts / 0.3.276", detection)
+			}
+		})
+	}
+}
+
+func TestDetectClaudeCodeRequestMatchesBillingEntrypointExactly(t *testing.T) {
+	titleBetas, titlePayload := measuredClaudeCodeAgentSDKHaiku55TitleFixture()
+	for _, tc := range []struct {
+		name       string
+		entrypoint string
+		billing    string
+		want       bool
+	}{
+		{name: "sdk-ts exact", entrypoint: "sdk-ts", billing: "cc_entrypoint=sdk-ts", want: true},
+		{name: "sdk-ts trailing semicolon", entrypoint: "sdk-ts", billing: "cc_entrypoint=sdk-ts;", want: true},
+		{name: "sdk-ts cch", entrypoint: "sdk-ts", billing: "cc_entrypoint=sdk-ts; cch=00000;", want: true},
+		{name: "cli exact", entrypoint: "cli", billing: "cc_entrypoint=cli", want: true},
+		{name: "sdk-ts suffix", entrypoint: "sdk-ts", billing: "cc_entrypoint=sdk-ts-x"},
+		{name: "sdk-ts suffix cch", entrypoint: "sdk-ts", billing: "cc_entrypoint=sdk-ts-x; cch=00000;"},
+		{name: "cli suffix", entrypoint: "cli", billing: "cc_entrypoint=cli-extra"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			headers := measuredClaudeCodeHelperHeaders(titleBetas)
+			userAgent := "claude-cli/2.1.304 (external, " + tc.entrypoint + ", agent-sdk/0.3.276)"
+			if tc.entrypoint == "cli" {
+				userAgent = "claude-cli/2.1.304 (external, cli)"
+			}
+			headers.Set("User-Agent", userAgent)
+			headers.Set("X-Stainless-Package-Version", "0.128.0")
+			headers.Del("X-Client-Request-Id")
+			payload := []byte(strings.Replace(string(titlePayload), "cc_entrypoint=sdk-ts", tc.billing, 1))
+
+			detection := DetectClaudeCodeRequest(headers, payload, false)
+			if detection.Confirmed != tc.want || detection.HelperProfile != tc.want || detection.ConfirmedShape != tc.want {
+				t.Errorf("Confirmed=%t HelperProfile=%t ConfirmedShape=%t, want all %t", detection.Confirmed, detection.HelperProfile, detection.ConfirmedShape, tc.want)
 			}
 		})
 	}

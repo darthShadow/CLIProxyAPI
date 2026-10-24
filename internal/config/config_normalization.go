@@ -239,6 +239,7 @@ func (cfg *Config) SanitizeOAuthRequestScopedErrors() {
 			}
 			clean = append(clean, RequestScopedErrorRule{
 				Status:      r.Status,
+				Scope:       strings.ToLower(strings.TrimSpace(r.Scope)),
 				Match:       match,
 				MatchRegexr: matchRegexr,
 				Action:      action,

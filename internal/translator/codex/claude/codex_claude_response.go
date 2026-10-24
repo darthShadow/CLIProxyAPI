@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"math"
+	"strconv"
 	"strings"
 
 	translatorcommon "github.com/router-for-me/CLIProxyAPI/v8/internal/translator/common"
@@ -36,6 +37,8 @@ type ConvertCodexResponseToClaudeParams struct {
 	HasEmittedToolUse        bool
 	BlockIndex               int
 	HasTextDelta             bool
+	TextParts                map[string]struct{}
+	TextPartsUnkeyed         bool
 	TextBlockOpen            bool
 	// CommentaryMessageOpen is set while the current `message` output item carries
 	// phase "commentary": a preamble GPT-5.x emits before its final_answer item.
@@ -143,7 +146,7 @@ func ConvertCodexResponseToClaude(_ context.Context, _ string, originalRequestRa
 		// Intentionally does not close the thinking block: it stays open until
 		// output_item.done delivers the reasoning item's final encrypted_content.
 	case "response.content_part.added":
-		if rootResult.Get("part.type").String() == "output_text" {
+		if partType := rootResult.Get("part.type").String(); partType == "output_text" || partType == "refusal" {
 			if params.CommentaryMessageOpen {
 				output = append(output, startCodexThinkingBlock(params)...)
 			} else {
@@ -153,8 +156,9 @@ func ConvertCodexResponseToClaude(_ context.Context, _ string, originalRequestRa
 		} else {
 			output = append(output, finalizeCodexThinkingBlock(params)...)
 		}
-	case "response.output_text.delta":
+	case "response.output_text.delta", "response.refusal.delta":
 		params.HasTextDelta = true
+		markCodexTextPart(params, rootResult.Get("item_id").String(), rootResult.Get("content_index").Int())
 		if params.CommentaryMessageOpen {
 			output = append(output, startCodexThinkingBlock(params)...)
 			output = append(output, appendCodexThinkingDelta(params, rootResult.Get("delta").String())...)
@@ -168,7 +172,7 @@ func ConvertCodexResponseToClaude(_ context.Context, _ string, originalRequestRa
 
 		output = translatorcommon.AppendSSEEventBytes(output, "content_block_delta", template, 2)
 	case "response.content_part.done":
-		if rootResult.Get("part.type").String() == "output_text" {
+		if partType := rootResult.Get("part.type").String(); partType == "output_text" || partType == "refusal" {
 			if params.CommentaryMessageOpen {
 				output = append(output, finalizeCodexCommentaryBlock(params)...)
 			} else {
@@ -182,6 +186,16 @@ func ConvertCodexResponseToClaude(_ context.Context, _ string, originalRequestRa
 		responseData := rootResult.Get("response")
 		output = append(output, finalizeCodexThinkingBlock(params)...)
 		output = append(output, stopCodexTextBlock(params)...)
+		// Text that reached no client block through a delta or
+		// output_item.done is recovered here, per item and content index.
+		if !params.TextPartsUnkeyed {
+			responseData.Get("output").ForEach(func(_, item gjson.Result) bool {
+				if item.Get("type").String() == "message" {
+					output = appendCodexMessageItemText(output, params, item, item.Get("phase").String() == "commentary")
+				}
+				return true
+			})
+		}
 		output = appendCodexFunctionCallsFromTerminal(output, params, originalRequestRawJSON, responseData)
 		output = appendDeferredCodexStreamEvents(output, originalRequestRawJSON, param)
 		output = append(output, finalizeCodexThinkingBlock(params)...)
@@ -246,50 +260,14 @@ func ConvertCodexResponseToClaude(_ context.Context, _ string, originalRequestRa
 				params.CommentaryMessageOpen = false
 				params.HasTextDelta = false
 			}()
-			if params.HasTextDelta {
-				if commentary {
-					output = append(output, finalizeCodexCommentaryBlock(params)...)
-				}
-				return [][]byte{output}
-			}
-			contentResult := itemResult.Get("content")
-			if !contentResult.Exists() || !contentResult.IsArray() {
-				return [][]byte{output}
-			}
-			var textBuilder strings.Builder
-			contentResult.ForEach(func(_, part gjson.Result) bool {
-				if part.Get("type").String() != "output_text" {
-					return true
-				}
-				if txt := part.Get("text").String(); txt != "" {
-					textBuilder.WriteString(txt)
-				}
-				return true
-			})
-			text := textBuilder.String()
-			if text == "" {
-				return [][]byte{output}
-			}
-			if commentary {
-				// Whole on done, nothing streamed: emit it as thinking.
-				output = append(output, finalizeCodexThinkingBlock(params)...)
-				output = append(output, stopCodexTextBlock(params)...)
-				params.CommentaryMessageOpen = true
-				output = append(output, startCodexThinkingBlock(params)...)
-				output = append(output, appendCodexThinkingDelta(params, text)...)
+			if params.HasTextDelta && commentary {
 				output = append(output, finalizeCodexCommentaryBlock(params)...)
-				return [][]byte{output}
 			}
-
-			output = append(output, finalizeCodexThinkingBlock(params)...)
-			output = append(output, startCodexTextBlock(params)...)
-
-			template = []byte(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":""}}`)
-			template, _ = sjson.SetBytes(template, "index", params.BlockIndex)
-			template, _ = sjson.SetBytes(template, "delta.text", text)
-			output = translatorcommon.AppendSSEEventBytes(output, "content_block_delta", template, 2)
-
-			output = append(output, stopCodexTextBlock(params)...)
+			// Unkeyed deltas cannot tell which parts streamed, so an item that
+			// streamed any of them gets no done fallback.
+			if !params.HasTextDelta || !params.TextPartsUnkeyed {
+				output = appendCodexMessageItemText(output, params, itemResult, commentary)
+			}
 		case "function_call":
 			output = append(output, finalizeCodexThinkingBlock(params)...)
 			output = append(output, stopCodexTextBlock(params)...)
@@ -470,11 +448,15 @@ func ConvertCodexResponseToClaudeNonStream(_ context.Context, _ string, original
 				if content := item.Get("content"); content.Exists() {
 					if content.IsArray() {
 						content.ForEach(func(_, part gjson.Result) bool {
-							if part.Get("type").String() == "output_text" {
-								text := part.Get("text").String()
-								if text != "" {
-									contentBlocks = append(contentBlocks, codexMessageTextBlock(blockType, text))
-								}
+							text := ""
+							switch part.Get("type").String() {
+							case "output_text":
+								text = part.Get("text").String()
+							case "refusal":
+								text = part.Get("refusal").String()
+							}
+							if text != "" {
+								contentBlocks = append(contentBlocks, codexMessageTextBlock(blockType, text))
 							}
 							return true
 						})
@@ -943,6 +925,92 @@ func buildReverseMapFromClaudeOriginalShortToOriginal(original []byte) map[strin
 
 func ClaudeTokenCount(_ context.Context, count int64) []byte {
 	return translatorcommon.ClaudeInputTokensJSON(count)
+}
+
+// codexTextPartKey names one content part of one output item.
+func codexTextPartKey(itemID string, contentIndex int64) string {
+	return itemID + "#" + strconv.FormatInt(contentIndex, 10)
+}
+
+// markCodexTextPart records that text for one item and content index reached
+// the client. A delta without an item ID falls back to the response-wide rule:
+// later item text is not recovered, so nothing is shown twice.
+func markCodexTextPart(params *ConvertCodexResponseToClaudeParams, itemID string, contentIndex int64) {
+	if itemID == "" {
+		params.TextPartsUnkeyed = true
+		return
+	}
+	if params.TextParts == nil {
+		params.TextParts = make(map[string]struct{})
+	}
+	params.TextParts[codexTextPartKey(itemID, contentIndex)] = struct{}{}
+}
+
+// appendCodexMessageItemText emits the output_text and refusal parts of one
+// message item that have not reached the client yet, joined as one complete
+// text block, and marks each emitted part. A refusal is shown as ordinary text.
+// A commentary item's text goes into a thinking block instead.
+func appendCodexMessageItemText(output []byte, params *ConvertCodexResponseToClaudeParams, item gjson.Result, commentary bool) []byte {
+	content := item.Get("content")
+	if !content.IsArray() {
+		return output
+	}
+	itemID := item.Get("id").String()
+	var textBuilder strings.Builder
+	var emitted []string
+	content.ForEach(func(index, part gjson.Result) bool {
+		key := codexTextPartKey(itemID, index.Int())
+		if _, done := params.TextParts[key]; done && itemID != "" {
+			return true
+		}
+		text := ""
+		switch part.Get("type").String() {
+		case "output_text":
+			text = part.Get("text").String()
+		case "refusal":
+			text = part.Get("refusal").String()
+		}
+		if text != "" {
+			textBuilder.WriteString(text)
+			emitted = append(emitted, key)
+		}
+		return true
+	})
+	text := textBuilder.String()
+	if text == "" {
+		return output
+	}
+	if commentary {
+		// Whole on done, nothing streamed: emit it as thinking.
+		output = append(output, finalizeCodexThinkingBlock(params)...)
+		output = append(output, stopCodexTextBlock(params)...)
+		params.CommentaryMessageOpen = true
+		output = append(output, startCodexThinkingBlock(params)...)
+		output = append(output, appendCodexThinkingDelta(params, text)...)
+		output = append(output, finalizeCodexCommentaryBlock(params)...)
+		params.CommentaryMessageOpen = false
+	} else {
+		output = append(output, finalizeCodexThinkingBlock(params)...)
+		output = append(output, startCodexTextBlock(params)...)
+		template := []byte(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":""}}`)
+		template, _ = sjson.SetBytes(template, "index", params.BlockIndex)
+		template, _ = sjson.SetBytes(template, "delta.text", text)
+		output = translatorcommon.AppendSSEEventBytes(output, "content_block_delta", template, 2)
+		output = append(output, stopCodexTextBlock(params)...)
+	}
+	if params.TextParts == nil {
+		params.TextParts = make(map[string]struct{})
+	}
+	for _, key := range emitted {
+		params.TextParts[key] = struct{}{}
+	}
+	if itemID == "" {
+		// An item without an ID cannot be matched again, so the terminal event
+		// recovers nothing after it.
+		params.TextPartsUnkeyed = true
+	}
+	params.HasTextDelta = true
+	return output
 }
 
 func startCodexTextBlock(params *ConvertCodexResponseToClaudeParams) []byte {

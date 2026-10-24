@@ -24,6 +24,16 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 	if baseURL == "" {
 		baseURL = "https://api.anthropic.com"
 	}
+	// Refuse an unconfirmed request before either count path, so the local
+	// estimate for custom origins (W's delegate) refuses too.
+	countPayload := req.Payload
+	if len(opts.OriginalRequest) > 0 {
+		countPayload = opts.OriginalRequest
+	}
+	countHeaders, countDetection := detectIncomingClaudeCodeRequest(ctx, opts.Headers, countPayload, true, e.cfg)
+	if errRefuse := refuseUnconfirmedClaudeRequest(e.cfg, countDetection, countHeaders); errRefuse != nil {
+		return cliproxyexecutor.Response{}, errRefuse
+	}
 	// Only Anthropic's first-party origin has the measured native count_tokens
 	// contract. Every custom/third-party base URL keeps local estimation,
 	// regardless of whether the credential is OAuth or an API key.
@@ -61,7 +71,7 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 	if rebuildMidSystemMessageEnabled(e.cfg, auth) {
 		body = rebuildMidSystemMessagesToTopLevel(body)
 	}
-	body = sanitizeClaudeMessagesForClaudeUpstreamWithDebug(ctx, body, baseModel, helps.APIKeyModelIsCompat(req))
+	body = sanitizeClaudeMessagesForClaudeUpstreamWithDebug(ctx, body, baseModel, false, helps.APIKeyModelIsCompat(req))
 	body = applyClaudePreservedThinkingBinding(body)
 	body = helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, to.String(), "", originalTranslatedForPayload, req, opts)(body)
 	body = stripPromptCacheOptions(body)
@@ -154,6 +164,9 @@ func (e *ClaudeExecutor) countTokensUpstream(ctx context.Context, auth *cliproxy
 		originalPayload = opts.OriginalRequest
 	}
 	incomingHeaders, claudeCodeDetection := detectIncomingClaudeCodeRequest(ctx, opts.Headers, originalPayload, true, e.cfg)
+	if errRefuse := refuseUnconfirmedClaudeRequest(e.cfg, claudeCodeDetection, incomingHeaders); errRefuse != nil {
+		return cliproxyexecutor.Response{}, errRefuse
+	}
 	initialPolicy, _ := resolveClaudeWirePolicy(e.cfg, auth, apiKey, claudeCodeDetection.Confirmed)
 	confirmedClaudeCode := isEffectiveConfirmedClaudeCode(claudeCodeDetection, initialPolicy)
 	claudeSessionID := ""
@@ -171,10 +184,13 @@ func (e *ClaudeExecutor) countTokensUpstream(ctx context.Context, auth *cliproxy
 		originalTranslatedForPayload = helps.TranslateRequestWithAPIKeyModelCompatibility(ctx, opts.Headers, e.cfg, from, to, baseModel, opts.OriginalRequest, stream, helps.APIKeyModelIsCompat(req))
 	}
 	body = helps.SetStringIfDifferent(body, "model", upstreamModel)
-	var errThinking error
-	body, errThinking = helps.ApplyRequestThinking(body, req, opts, from.String(), to.String(), e.Identifier())
-	if errThinking != nil {
-		return cliproxyexecutor.Response{}, errThinking
+	// A confirmed client keeps its own thinking field.
+	if !confirmedClaudeCode {
+		var errThinking error
+		body, errThinking = helps.ApplyRequestThinking(body, req, opts, from.String(), to.String(), e.Identifier())
+		if errThinking != nil {
+			return cliproxyexecutor.Response{}, errThinking
+		}
 	}
 	webSearchSessionKey, webSearchTTL, _ := e.claudeWebSearchResultCacheScope(ctx, auth, from, req, opts, originalPayload)
 	body = helps.RestoreClaudeWebSearchResultsContext(ctx, body, webSearchSessionKey, webSearchTTL)
@@ -220,8 +236,11 @@ func (e *ClaudeExecutor) countTokensUpstream(ctx context.Context, auth *cliproxy
 		mcpAliases := resolveClaudeMCPAliasOptions(ctx, opts.Metadata, req.Metadata)
 		body, _ = prepareClaudeOAuthToolNamesForUpstream(body, mcpAliases)
 	}
-	body = sanitizeClaudeMessagesForClaudeUpstreamWithDebug(ctx, body, baseModel, helps.APIKeyModelIsCompat(req))
-	body = applyClaudePreservedThinkingBinding(body)
+	body = sanitizeClaudeMessagesForClaudeUpstreamWithDebug(ctx, body, baseModel, confirmedClaudeCode, helps.APIKeyModelIsCompat(req))
+	// A confirmed client keeps its own thinking field.
+	if !confirmedClaudeCode {
+		body = applyClaudePreservedThinkingBinding(body)
+	}
 	body = stripPromptCacheOptions(body)
 	// Two different reasons converge on the same deletions, and they must stay
 	// separable.
@@ -298,6 +317,7 @@ func (e *ClaudeExecutor) countTokensUpstream(ctx context.Context, auth *cliproxy
 			return cliproxyexecutor.Response{}, classifyClaudeUpstreamErrorWithCooling(resp.StatusCode, resp.Header, []byte(msg), e.modelLevelCooling())
 		}
 		b, readErr := io.ReadAll(errBody)
+		helps.NoteClaudeGzipRejection(httpReq, resp.StatusCode, resp.Header, b)
 		if readErr != nil {
 			helps.RecordAPIResponseError(ctx, e.cfg, readErr)
 			msg := fmt.Sprintf("failed to read error response body: %v", readErr)
@@ -307,6 +327,9 @@ func (e *ClaudeExecutor) countTokensUpstream(ctx context.Context, auth *cliproxy
 		helps.AppendAPIResponseChunk(ctx, e.cfg, b)
 		if errClose := errBody.Close(); errClose != nil {
 			log.Errorf("response body close error: %v", errClose)
+		}
+		if billingPassthroughStatus(resp.StatusCode) {
+			return cliproxyexecutor.Response{}, newClaudeFastDirectResponseError(resp, b)
 		}
 		return cliproxyexecutor.Response{}, classifyClaudeUpstreamErrorWithCooling(resp.StatusCode, resp.Header, b, e.modelLevelCooling())
 	}

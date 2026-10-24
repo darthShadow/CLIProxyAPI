@@ -553,3 +553,14 @@ func rebuildMidSystemMessageEnabled(cfg *config.Config, auth *cliproxyauth.Auth)
 	entry := resolveClaudeKeyConfig(cfg, auth)
 	return entry != nil && entry.RebuildMidSystemMessage
 }
+
+// zeroClaudeBillingCCH resets only an existing valid billing CCH for gzip framing.
+func zeroClaudeBillingCCH(body []byte) []byte {
+	offset, ok := claudeBillingCCHDigitsOffset(body)
+	if !ok {
+		return body
+	}
+	unsigned := bytes.Clone(body)
+	copy(unsigned[offset:offset+claudeCCHLength], claudeCCHZero)
+	return unsigned
+}

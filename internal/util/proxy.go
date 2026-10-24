@@ -4,6 +4,7 @@
 package util
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
@@ -27,4 +28,11 @@ func SetProxy(cfg *config.SDKConfig, httpClient *http.Client) *http.Client {
 		httpClient.Transport = transport
 	}
 	return httpClient
+}
+
+// RefuseRedirect is an http.Client CheckRedirect policy that stops before any
+// redirect, so a request body and its credential reach only the URL the caller
+// chose.
+func RefuseRedirect(req *http.Request, _ []*http.Request) error {
+	return fmt.Errorf("upstream redirect to host %q refused", req.URL.Host)
 }

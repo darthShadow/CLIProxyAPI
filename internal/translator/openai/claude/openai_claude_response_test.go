@@ -109,7 +109,7 @@ func TestStreaming_LateUsageOnlyDoesNotEmitAfterMessageStop(t *testing.T) {
 		`{"id":"c1","model":"m","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
 		`{"id":"c1","model":"m","choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}]}`,
 		`{"id":"c1","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`,
-		`{"id":"c1","model":"m","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}`,
+		`{"id":"c1","model":"m","choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":900}}}`,
 	)
 
 	if got := countByType(events, "message_delta"); got != 1 {
@@ -194,6 +194,133 @@ func TestStreaming_SplitUsageFinishReasonThenTrailingUsageChunk_PreservesCachedT
 			if output != 741 {
 				t.Fatalf("expected output_tokens = 741, got %d (payload=%s)", output, deltaPayload)
 			}
+		})
+	}
+}
+
+func TestStreamingUsage_LateUsageOnlyUpdatesFinalCounts(t *testing.T) {
+	events := runStream(t, streamReq,
+		`{"id":"c1","model":"m","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
+		`{"id":"c1","model":"m","choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}]}`,
+		`{"id":"c1","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`,
+		`{"id":"c1","model":"m","choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":900}}}`,
+	)
+	assertStreamingUsage(t, events, 100, 10, 900, 0)
+}
+
+func assertStreamingUsage(t *testing.T, events []sseEvent, input, output, cacheRead, cacheWrite int64) {
+	t.Helper()
+	if got := countByType(events, "message_delta"); got != 1 {
+		t.Fatalf("message_delta count = %d, want 1 (events=%+v)", got, events)
+	}
+	if got := countByType(events, "message_stop"); got != 1 {
+		t.Fatalf("message_stop count = %d, want 1 (events=%+v)", got, events)
+	}
+	if len(events) == 0 || events[len(events)-1].Type != "message_stop" {
+		t.Fatalf("last event must be message_stop (events=%+v)", events)
+	}
+	for _, event := range events {
+		if event.Type != "message_delta" {
+			continue
+		}
+		for _, field := range []struct {
+			name string
+			want int64
+		}{
+			{"input_tokens", input},
+			{"output_tokens", output},
+			{"cache_read_input_tokens", cacheRead},
+			{"cache_creation_input_tokens", cacheWrite},
+		} {
+			value := gjson.Get(event.Payload, "usage."+field.name)
+			if got := value.Int(); got != field.want {
+				t.Errorf("%s = %d, want %d (usage=%s)", field.name, got, field.want, gjson.Get(event.Payload, "usage").Raw)
+			}
+			if field.want > 0 && !value.Exists() {
+				t.Errorf("missing usage.%s, want %d", field.name, field.want)
+			}
+		}
+	}
+}
+
+func TestStreamingUsage_FinalUsageAcrossChunks(t *testing.T) {
+	const content = `{"id":"c1","model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"},"finish_reason":null}]}`
+	const finish = `{"id":"c1","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`
+	const finishTotals = `{"id":"c1","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1000,"completion_tokens":10}}`
+	const finishCached = `{"id":"c1","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1000,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":900}}}`
+	const trailingCached = `{"id":"c1","model":"m","choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":900}}}`
+	tests := []struct {
+		name       string
+		chunks     []string
+		cleanEOF   bool
+		input      int64
+		cacheRead  int64
+		cacheWrite int64
+	}{
+		{
+			name: "B1", chunks: []string{content, finishTotals, trailingCached}, input: 100, cacheRead: 900,
+		},
+		{
+			name: "B2",
+			chunks: []string{
+				`{"id":"c1","model":"m","choices":[{"index":0,"delta":{"role":"assistant"}}],"usage":{"prompt_tokens":1000,"completion_tokens":1,"prompt_tokens_details":{"cached_tokens":900}}}`,
+				`{"id":"c1","model":"m","choices":[{"index":0,"delta":{"content":"hello"}}],"usage":{"prompt_tokens":1000,"completion_tokens":5}}`,
+				finishTotals,
+			},
+			input: 100, cacheRead: 900,
+		},
+		{
+			name: "B1NODONE", chunks: []string{content, finishTotals, trailingCached}, cleanEOF: true, input: 100, cacheRead: 900,
+		},
+		{
+			name: "ZERO",
+			chunks: []string{content, finishCached,
+				`{"id":"c1","model":"m","choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":0}}}`},
+			input: 1000,
+		},
+		{
+			name: "B1_cache_write",
+			chunks: []string{content, finishTotals,
+				`{"id":"c1","model":"m","choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":900,"cache_write_tokens":50}}}`},
+			input: 50, cacheRead: 900, cacheWrite: 50,
+		},
+		{
+			name: "B2_cache_creation_alias",
+			chunks: []string{
+				`{"id":"c1","model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"}}],"usage":{"prompt_tokens":1000,"completion_tokens":1,"prompt_tokens_details":{"cached_tokens":900,"cache_creation_tokens":50}}}`,
+				finishTotals,
+			},
+			input: 50, cacheRead: 900, cacheWrite: 50,
+		},
+		{
+			name: "partial_trailing_usage",
+			chunks: []string{content, finishTotals,
+				`{"id":"c1","model":"m","choices":[],"usage":{"prompt_tokens_details":{"cached_tokens":900}}}`},
+			input: 100, cacheRead: 900,
+		},
+		{
+			name: "A", chunks: []string{content, finish, trailingCached}, input: 100, cacheRead: 900,
+		},
+		{
+			name: "finish_and_trailing_full_usage", chunks: []string{content, finishCached, trailingCached}, input: 100, cacheRead: 900,
+		},
+		{
+			name: "ZERO_without_prior_cache",
+			chunks: []string{content, finish,
+				`{"id":"c1","model":"m","choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":0}}}`},
+			input: 1000,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chunks := append([]string(nil), tt.chunks...)
+			if !tt.cleanEOF {
+				chunks = append(chunks, "[DONE]")
+			}
+			// runStream supplies the terminal marker at EOF, as the non-Responses EOF
+			// branch in openai_compat_executor.go does for Claude. B1NODONE has no upstream marker.
+			events := runStream(t, streamReq, chunks...)
+			assertStreamingUsage(t, events, tt.input, 10, tt.cacheRead, tt.cacheWrite)
 		})
 	}
 }

@@ -66,11 +66,6 @@ type ConvertOpenAIResponseToAnthropicParams struct {
 	OpenToolCallIndex int
 	// Queue of interleaved text or thinking chunks arriving while a tool call is open
 	InterleavedContentChunks []InterleavedContentChunk
-	// Usage metrics cached from streaming chunks
-	UsageInputTokens      int64
-	UsageOutputTokens     int64
-	UsageCachedTokens     int64
-	UsageCacheWriteTokens int64
 	// ToolNameMapResolved tracks whether ToolNameMap has been resolved from
 	// the original request once per stream.
 	ToolNameMapResolved bool
@@ -79,6 +74,8 @@ type ConvertOpenAIResponseToAnthropicParams struct {
 	// are not re-parsed on every chunk.
 	StreamResolved  bool
 	StreamRequested bool
+	// Raw usage fields are merged before cache tokens are deducted at completion.
+	UsageJSON string
 }
 
 // InterleavedContentChunk stores a buffered chunk of text or thinking arriving while a tool call is open
@@ -130,10 +127,7 @@ func ConvertOpenAIResponseToClaude(_ context.Context, _ string, originalRequestR
 			NextContentBlockIndex:       0,
 			OpenToolCallIndex:           -1,
 			InterleavedContentChunks:    nil,
-			UsageInputTokens:            0,
-			UsageOutputTokens:           0,
-			UsageCachedTokens:           0,
-			UsageCacheWriteTokens:       0,
+			UsageJSON:                   "{}",
 		}
 	}
 
@@ -433,28 +427,21 @@ func convertOpenAIStreamingChunkToAnthropic(rawJSON []byte, param *ConvertOpenAI
 
 		finalizeOpenAIAnthropicContentBlocks(param, &results)
 
-		// Don't send message_delta here - wait for usage info or [DONE]
+		// Terminal usage waits for [DONE] so later chunks can supply final counts.
 	}
 
-	// Cache usage information whenever present
+	// Absent fields leave earlier counts intact; explicit zero replaces them.
 	usage := root.Get("usage")
-	hasUsage := usage.Exists() && usage.Type != gjson.Null
-	if hasUsage {
-		param.UsageInputTokens, param.UsageOutputTokens, param.UsageCachedTokens, param.UsageCacheWriteTokens = extractOpenAIUsage(usage)
-	}
-
-	// Emit message_delta and message_stop only when generation is finished:
-	// - Upstream sent a trailing usage-only chunk (choices array is empty or absent) after content/tools started, or
-	// - Upstream sent [DONE] (handled in convertOpenAIDoneToAnthropic).
-	// Content chunks with finish_reason and preliminary usage must not emit message_delta early,
-	// because authoritative token counts (such as cached_tokens) can arrive in the trailing usage-only chunk.
-	isTrailingUsageChunk := hasUsage && !root.Get("choices.0").Exists() &&
-		(param.FinishReason != "" || param.SawToolCall || param.TextContentBlockStarted || param.ThinkingContentBlockStarted || param.ContentAccumulator.Len() > 0 || len(param.InterleavedContentChunks) > 0)
-
-	if !param.MessageDeltaSent && isTrailingUsageChunk {
-		finalizeOpenAIAnthropicContentBlocks(param, &results)
-		emitAnthropicMessageDelta(param, &results, param.UsageInputTokens, param.UsageOutputTokens, param.UsageCachedTokens, param.UsageCacheWriteTokens)
-		emitMessageStopIfNeeded(param, &results)
+	for _, path := range []string{
+		"prompt_tokens",
+		"completion_tokens",
+		"prompt_tokens_details.cached_tokens",
+		"prompt_tokens_details.cache_write_tokens",
+		"prompt_tokens_details.cache_creation_tokens",
+	} {
+		if value := usage.Get(path); value.Exists() {
+			param.UsageJSON, _ = sjson.SetRaw(param.UsageJSON, path, value.Raw)
+		}
 	}
 
 	return results
@@ -467,7 +454,8 @@ func convertOpenAIDoneToAnthropic(param *ConvertOpenAIResponseToAnthropicParams)
 	finalizeOpenAIAnthropicContentBlocks(param, &results)
 
 	if !param.MessageDeltaSent {
-		emitAnthropicMessageDelta(param, &results, param.UsageInputTokens, param.UsageOutputTokens, param.UsageCachedTokens, param.UsageCacheWriteTokens)
+		inputTokens, outputTokens, cachedTokens, cacheWriteTokens := extractOpenAIUsage(gjson.Parse(param.UsageJSON))
+		emitAnthropicMessageDelta(param, &results, inputTokens, outputTokens, cachedTokens, cacheWriteTokens)
 	}
 
 	emitMessageStopIfNeeded(param, &results)

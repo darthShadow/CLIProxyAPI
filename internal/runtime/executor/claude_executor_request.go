@@ -788,6 +788,33 @@ func (claudeEntitlementError) IsCredentialScoped() bool {
 type claudeRateLimitError struct {
 	statusErr
 	credentialScoped bool
+	headers          http.Header
+}
+
+// Headers returns the filtered upstream headers the client should see.
+func (e claudeRateLimitError) Headers() http.Header {
+	if e.headers == nil {
+		return nil
+	}
+	return e.headers.Clone()
+}
+
+// claudeClientErrorHeaders keeps the upstream error headers Claude Code reads:
+// the anthropic-ratelimit family, Retry-After, request-id, and x-should-retry.
+// It returns nil when none is present.
+func claudeClientErrorHeaders(headers http.Header) http.Header {
+	var out http.Header
+	for key, values := range headers {
+		lower := strings.ToLower(key)
+		if !strings.HasPrefix(lower, "anthropic-ratelimit-") && lower != "retry-after" && lower != "request-id" && lower != "x-should-retry" {
+			continue
+		}
+		if out == nil {
+			out = http.Header{}
+		}
+		out[http.CanonicalHeaderKey(key)] = append([]string(nil), values...)
+	}
+	return out
 }
 
 func (e claudeRateLimitError) IsCredentialScoped() bool {
@@ -818,15 +845,19 @@ func classifyClaudeUpstreamErrorWithCooling(statusCode int, headers http.Header,
 		retryAfter = helps.ParseClaudeRateLimitResetForError(headers, body, time.Now())
 	}
 	err := statusErr{code: statusCode, msg: string(body), retryAfter: retryAfter}
+	clientHeaders := claudeClientErrorHeaders(headers)
 	if statusCode == http.StatusTooManyRequests {
 		if !modelLevelCooling && helps.ClaudeHeadersIndicateUnifiedRateLimitRejection(headers) {
-			return claudeRateLimitError{statusErr: err, credentialScoped: true}
+			return claudeRateLimitError{statusErr: err, credentialScoped: true, headers: clientHeaders}
 		}
 		if claudeBodyIndicatesFastModeCredits(body) {
 			return claudeEntitlementError{err}
 		}
 		// Ordinary model-level Claude 429 (not a unified 5h/7d rejection)
-		return claudeRateLimitError{statusErr: err, credentialScoped: false}
+		return claudeRateLimitError{statusErr: err, credentialScoped: false, headers: clientHeaders}
+	}
+	if clientHeaders != nil {
+		return statusErrWithHeaders{statusErr: err, headers: clientHeaders}
 	}
 	return err
 }
@@ -1304,12 +1335,17 @@ func applyClaudeHeadersWithNativeProfile(
 			if countTokens {
 				baseBetas = withClaudeCountTokensOAuthBeta(baseBetas)
 			} else {
-				isSubagent := helps.IsClaudeSubagentRequest(incomingHeaders, body)
-				isProbe := helps.IsClaudeProbeOrHelperRequest(body)
-				subagent1h := isSubagent && helps.ClaudeSubagentRequests1h(incomingHeaders, body)
-				includeExtendedCacheTTL := !helperProfile && (!isSubagent || subagent1h) && !isProbe
+				// The TTL beta goes out only when a 1-hour cache marker in the body
+				// needs it.
+				includeExtendedCacheTTL := !helperProfile && helps.ClaudePayloadHas1hTTL(body) && !helps.IsClaudeProbeOrHelperRequest(body)
 				baseBetas = withClaudeOAuthCredentialBetas(baseBetas, includeExtendedCacheTTL)
 			}
+			// Upstream's useOAuthBetas branch above now serves helpers too, with no
+			// extended-cache-ttl, so this fork branch is unreachable.
+			// } else if useOAuthBetas {
+			// 	// A helper that reached the proxy with the proxy's own key, such as the
+			// 	// Agent SDK session title, has no OAuth beta; the OAuth credential needs it.
+			// 	baseBetas = withClaudeOAuthCredentialBetas(baseBetas, false)
 		}
 	} else if preserveCallerFingerprint && useOAuthBetas {
 		if countTokens {
@@ -1321,7 +1357,11 @@ func applyClaudeHeadersWithNativeProfile(
 	if preserveCallerFingerprint && advisorNeeded {
 		baseBetas = withClaudeAdvisorToolBeta(baseBetas)
 	}
-	if !claudeRequestSupportsEffort(body, nil) {
+	// A confirmed native client decides effort support itself: Claude Code
+	// 2.1.295 sends effort-2025-11-24 on its Haiku 5.5 session title, a body that
+	// claudeRequestSupportsEffort rejects as a Haiku model and as a helper.
+	keepClientEffort := confirmedClaudeCode && claudeRequestedBetas(incomingBetas, nil)[claudeEffortBeta]
+	if !keepClientEffort && !claudeRequestSupportsEffort(body, nil) {
 		baseBetas = withoutClaudeBeta(baseBetas, claudeEffortBeta)
 	}
 	existingSet := make(map[string]bool)
@@ -1395,7 +1435,7 @@ func applyClaudeHeadersWithNativeProfile(
 			}
 		}
 		// Enforce strict native Claude Code 2.1.280 model & turn beta gating:
-		if !claudeRequestSupportsEffort(body, nil) {
+		if !keepClientEffort && !claudeRequestSupportsEffort(body, nil) {
 			baseBetas = withoutClaudeBeta(baseBetas, claudeEffortBeta)
 		}
 		reqProbeOrHelper := helps.IsClaudeProbeOrHelperRequest(body)
@@ -1578,6 +1618,8 @@ func applyClaudeHeadersWithNativeProfile(
 			"X-Claude-Code-Prev-Tool-Durations",
 			"X-Claude-Code-Compaction",
 			"X-Claude-Code-Context-Compacted",
+			"X-Claude-Code-Prompt-Id",
+			"X-Cc-Compaction-Request",
 		} {
 			if val := helps.HeaderValueCaseInsensitive(incomingHeaders, hdr); val != "" {
 				r.Header.Set(hdr, val)
@@ -1670,6 +1712,7 @@ func applyClaudeHeadersWithNativeProfile(
 // for one of the three request paths to drift away from the others, which is
 // exactly how the streaming and non-streaming beta sets diverged before.
 func doClaudeUpstreamRequest(client *http.Client, req *http.Request) (*http.Response, error) {
+	helps.ApplyClaudeRequestGzip(req, zeroClaudeBillingCCH)
 	applyClaudeWireHeaderCasing(req)
 	cliproxyexecutor.MarkUpstreamAttempt(req.Context())
 	return client.Do(req)

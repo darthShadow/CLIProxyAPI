@@ -10,6 +10,12 @@ import (
 // AntigravityCAQS builds a double-base64 Google Claude thinking envelope.
 // All opaque fields are generated zeros, not captured or replayable state.
 func AntigravityCAQS() string {
+	return base64.StdEncoding.EncodeToString([]byte(ClaudeCAISv4("thinking")))
+}
+
+// ClaudeCAISv4 builds a single-base64 v4 envelope with the given block kind.
+// All opaque fields are generated zeros, not captured or replayable state.
+func ClaudeCAISv4(kind string) string {
 	appendVarint := func(dst []byte, field protowire.Number, value uint64) []byte {
 		return protowire.AppendVarint(protowire.AppendTag(dst, field, protowire.VarintType), value)
 	}
@@ -21,7 +27,7 @@ func AntigravityCAQS() string {
 	channel = appendVarint(channel, 2, 2)
 	channel = appendVarint(channel, 3, 2)
 	channel = appendVarint(channel, 7, 1)
-	channel = appendBytes(channel, 8, []byte("thinking"))
+	channel = appendBytes(channel, 8, []byte(kind))
 	container := appendBytes(nil, 1, channel)
 	container = appendBytes(container, 2, make([]byte, 12))
 	container = appendBytes(container, 3, make([]byte, 12))
@@ -30,6 +36,5 @@ func AntigravityCAQS() string {
 	payload := appendVarint(nil, 1, 4)
 	payload = appendBytes(payload, 2, container)
 	payload = appendVarint(payload, 3, 1)
-	inner := base64.StdEncoding.EncodeToString(payload)
-	return base64.StdEncoding.EncodeToString([]byte(inner))
+	return base64.StdEncoding.EncodeToString(payload)
 }
