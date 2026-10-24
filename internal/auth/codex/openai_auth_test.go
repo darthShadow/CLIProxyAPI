@@ -95,6 +95,42 @@ func TestRefreshTokensWithRetry_NonRetryableOnlyAttemptsOnce(t *testing.T) {
 	}
 }
 
+func TestRefreshTokensWithRetry_TerminalErrorsAttemptOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "invalid grant", status: http.StatusBadRequest, body: `{"error":"invalid_grant"}`},
+		{name: "refresh token invalidated", status: http.StatusUnauthorized, body: `{"error":{"code":"refresh_token_invalidated"}}`},
+		{name: "token invalidated", status: http.StatusUnauthorized, body: `{"error":{"code":"token_invalidated"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls int32
+			auth := &CodexAuth{
+				httpClient: &http.Client{
+					Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+						atomic.AddInt32(&calls, 1)
+						return &http.Response{
+							StatusCode: tc.status,
+							Body:       io.NopCloser(strings.NewReader(tc.body)),
+							Header:     make(http.Header),
+							Request:    req,
+						}, nil
+					}),
+				},
+			}
+
+			if _, err := auth.RefreshTokensWithRetry(context.Background(), "terminal_"+tc.name, 3); err == nil {
+				t.Fatalf("expected error for terminal refresh failure")
+			}
+			if got := atomic.LoadInt32(&calls); got != 1 {
+				t.Fatalf("expected 1 refresh attempt, got %d", got)
+			}
+		})
+	}
+}
+
 func TestRefreshTokens_DeduplicatesConcurrentRefreshAcrossInstances(t *testing.T) {
 	resetCodexRefreshGroupForTest()
 	t.Cleanup(resetCodexRefreshGroupForTest)

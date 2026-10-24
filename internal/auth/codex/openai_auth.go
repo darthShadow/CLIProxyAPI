@@ -348,7 +348,18 @@ func isNonRetryableRefreshErr(err error) bool {
 		return false
 	}
 	raw := strings.ToLower(err.Error())
-	return strings.Contains(raw, "refresh_token_reused")
+	// A reused, invalidated, or revoked refresh token never succeeds on retry.
+	for _, terminal := range []string{
+		"refresh_token_reused",
+		"refresh_token_invalidated",
+		"token_invalidated",
+		"invalid_grant",
+	} {
+		if strings.Contains(raw, terminal) {
+			return true
+		}
+	}
+	return false
 }
 
 // UpdateTokenStorage updates an existing CodexTokenStorage with new token data.

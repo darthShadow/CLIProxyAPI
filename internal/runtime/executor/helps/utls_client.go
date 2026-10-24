@@ -26,10 +26,88 @@ import (
 )
 
 // utlsRoundTripper implements http.RoundTripper using a Chrome fingerprint for
-// providers that require browser-like TLS. The HTTP version follows ALPN. Each
-// request gets a dedicated connection that is closed with the response body.
+// providers that require browser-like TLS. HTTP/2 connections are pooled per
+// address; other protocols close their dedicated connection with the body.
 type utlsRoundTripper struct {
 	dialer proxy.Dialer
+	roots  *x509.CertPool
+
+	// h2 holds one multiplexed HTTP/2 connection per address. Chrome and the
+	// Codex CLI both keep their chatgpt.com connection open between requests.
+	mu sync.Mutex
+	h2 map[string]*http2.ClientConn
+}
+
+const chatGPTRoundTripperCacheCapacity = 64
+
+var chatGPTRoundTripperCache = internalcache.NewBoundedLRU[string, http.RoundTripper](
+	chatGPTRoundTripperCacheCapacity,
+	func(_ string, roundTripper http.RoundTripper) {
+		if transport, ok := roundTripper.(interface{ CloseIdleConnections() }); ok {
+			transport.CloseIdleConnections()
+		}
+	},
+)
+
+func cachedChatGPTRoundTripper(proxyURL string) http.RoundTripper {
+	return chatGPTRoundTripperCache.GetOrAdd(proxyURL, func() http.RoundTripper {
+		return newUtlsRoundTripper(proxyURL)
+	})
+}
+
+// CloseIdleConnections closes every pooled connection after its streams end.
+func (t *utlsRoundTripper) CloseIdleConnections() {
+	t.mu.Lock()
+	conns := t.h2
+	t.h2 = nil
+	t.mu.Unlock()
+	for _, conn := range conns {
+		go func() { _ = conn.Shutdown(context.Background()) }()
+	}
+}
+
+// pooledH2 returns the usable pooled connection for addr, dropping a dead one.
+func (t *utlsRoundTripper) pooledH2(addr string) *http2.ClientConn {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	conn := t.h2[addr]
+	if conn == nil {
+		return nil
+	}
+	if state := conn.State(); state.Closed || state.Closing || !conn.CanTakeNewRequest() {
+		delete(t.h2, addr)
+		return nil
+	}
+	return conn
+}
+
+// dropH2 forgets conn if it is still the pooled entry for addr.
+func (t *utlsRoundTripper) dropH2(addr string, conn *http2.ClientConn) {
+	t.mu.Lock()
+	if t.h2[addr] == conn {
+		delete(t.h2, addr)
+	}
+	t.mu.Unlock()
+}
+
+func (t *utlsRoundTripper) putH2(addr string, conn *http2.ClientConn) {
+	t.mu.Lock()
+	if t.h2 == nil {
+		t.h2 = make(map[string]*http2.ClientConn)
+	}
+	t.h2[addr] = conn
+	t.mu.Unlock()
+}
+
+// unsentOnPooledH2 reports a pooled-connection failure that happened before
+// the request reached the server, so a fresh connection may carry it.
+func unsentOnPooledH2(err error) bool {
+	var streamErr http2.StreamError
+	if errors.As(err, &streamErr) && streamErr.Code == http2.ErrCodeRefusedStream {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "http2: client conn not usable") || strings.Contains(msg, "http2: Transport received Server's graceful shutdown GOAWAY")
 }
 
 type closeConnectionBody struct {
@@ -80,7 +158,8 @@ func (t *utlsRoundTripper) createConnection(ctx context.Context, host, addr stri
 		return nil, fmt.Errorf("utls: dial upstream: %w", errDial)
 	}
 
-	tlsConfig := &tls.Config{ServerName: host}
+	// tlsConfig := &tls.Config{ServerName: host}
+	tlsConfig := &tls.Config{ServerName: host, RootCAs: t.roots}
 	tlsConn := tls.UClient(conn, tlsConfig, tls.HelloChrome_Auto)
 
 	handshakeCtx, cancelHandshake := handshakeContext(ctx)
@@ -99,6 +178,14 @@ func (t *utlsRoundTripper) createConnection(ctx context.Context, host, addr stri
 	return tlsConn, nil
 }
 
+// newUtlsHTTP2Transport configures HTTP/2 on a uTLS connection. A PING after
+// 15 seconds without a frame, failing after 15 more, closes a connection that a
+// NAT or proxy dropped silently, so a long stream fails instead of hanging.
+func newUtlsHTTP2Transport() *http2.Transport {
+	// return &http2.Transport{ReadIdleTimeout: 15 * time.Second, PingTimeout: 15 * time.Second}
+	return &http2.Transport{ReadIdleTimeout: 15 * time.Second, PingTimeout: 15 * time.Second, IdleConnTimeout: 90 * time.Second}
+}
+
 func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	hostname := req.URL.Hostname()
 	port := req.URL.Port()
@@ -107,9 +194,49 @@ func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 	}
 	addr := net.JoinHostPort(hostname, port)
 
+	if conn := t.pooledH2(addr); conn != nil {
+		resp, errPooled := conn.RoundTrip(req)
+		if errPooled == nil {
+			return resp, nil
+		}
+		var streamErr http2.StreamError
+		if req.Context().Err() == nil && !errors.As(errPooled, &streamErr) {
+			t.dropH2(addr, conn)
+		}
+		if !unsentOnPooledH2(errPooled) || req.Context().Err() != nil {
+			return nil, errPooled
+		}
+		if req.Body != nil && req.Body != http.NoBody {
+			if req.GetBody == nil {
+				return nil, errPooled
+			}
+			body, errBody := req.GetBody()
+			if errBody != nil {
+				return nil, errPooled
+			}
+			req = req.Clone(req.Context())
+			req.Body = body
+		}
+	}
+
 	tlsConn, err := t.createConnection(req.Context(), hostname, addr)
 	if err != nil {
 		return nil, err
+	}
+	if tlsConn.ConnectionState().NegotiatedProtocol == "h2" {
+		conn, errClientConn := newUtlsHTTP2Transport().NewClientConn(tlsConn)
+		if errClientConn != nil {
+			_ = tlsConn.Close()
+			return nil, fmt.Errorf("utls: initialize HTTP/2 connection: %w", errClientConn)
+		}
+		t.putH2(addr, conn)
+		resp, errRoundTrip := conn.RoundTrip(req)
+		if errRoundTrip != nil {
+			t.dropH2(addr, conn)
+			go func() { _ = conn.Shutdown(context.Background()) }()
+			return nil, errRoundTrip
+		}
+		return resp, nil
 	}
 	return roundTripUtlsConnection(req, tlsConn)
 }
@@ -129,7 +256,7 @@ func roundTripUtlsConnection(req *http.Request, tlsConn *tls.UConn) (*http.Respo
 	var err error
 	switch protocol := tlsConn.ConnectionState().NegotiatedProtocol; protocol {
 	case "h2":
-		h2Conn, errClientConn := (&http2.Transport{}).NewClientConn(tlsConn)
+		h2Conn, errClientConn := newUtlsHTTP2Transport().NewClientConn(tlsConn)
 		if errClientConn != nil {
 			err = fmt.Errorf("utls: initialize HTTP/2 connection: %w", errClientConn)
 			break
@@ -466,7 +593,8 @@ func NewUtlsHTTPClient(ctx context.Context, cfg *config.Config, auth *cliproxyau
 		ctxRoundTripper, _ = ctx.Value("cliproxy.roundtripper").(http.RoundTripper)
 	}
 
-	var chromeRT http.RoundTripper = newUtlsRoundTripper(proxyURL)
+	// var chromeRT http.RoundTripper = newUtlsRoundTripper(proxyURL)
+	var chromeRT http.RoundTripper = cachedChatGPTRoundTripper(proxyURL)
 	var anthropicRT http.RoundTripper = cachedClaudeCodeRoundTripper(proxyURL)
 	var standardTransport http.RoundTripper = http.DefaultTransport
 	if proxyURL != "" {
