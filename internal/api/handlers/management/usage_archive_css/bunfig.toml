@@ -1,0 +1,7 @@
+[install]
+# Keep dependency resolution isolated to packages declared by this project.
+linker = "isolated"
+# Delay new package releases for three days before Bun may resolve them.
+minimumReleaseAge = 259200
+# Save dependency versions without ranges.
+exact = true

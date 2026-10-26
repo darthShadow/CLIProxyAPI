@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -177,33 +179,42 @@ func probeCodexIncludedUsage(ctx context.Context, cfg *config.Config, auth *clip
 	unknown := func(reason string) *codexUsageSnapshot {
 		return &codexUsageSnapshot{validUntil: now, readAt: now, detail: "included ChatGPT usage is unknown (" + reason + ")"}
 	}
-	token, baseURL := codexCreds(auth)
-	if strings.TrimSpace(token) == "" {
-		return unknown("no access token")
+	// token, baseURL := codexCreds(auth)
+	// if strings.TrimSpace(token) == "" {
+	// return unknown("no access token")
+	// }
+	// if strings.TrimSpace(baseURL) == "" {
+	// baseURL = codexDefaultBackendBaseURL
+	// }
+	// usageURL := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(baseURL), "/"), "/codex") + "/wham/usage"
+	// if ctx == nil {
+	// ctx = context.Background()
+	// }
+	// req, errReq := http.NewRequestWithContext(ctx, http.MethodGet, usageURL, nil)
+	// if errReq != nil {
+	// return unknown("usage request could not be built")
+	// }
+	// // Header set as CodexBar sends it on this read (Authorization, User-Agent,
+	// // Accept, ChatGPT-Account-Id); the User-Agent value is the executor's own
+	// // Codex identity, the one the same account's inference requests carry.
+	// req.Header.Set("Authorization", "Bearer "+token)
+	// req.Header.Set("User-Agent", codexUserAgent)
+	// req.Header.Set("Accept", "application/json")
+	// accountID := ""
+	// if auth.Metadata != nil {
+	// accountID, _ = auth.Metadata["account_id"].(string)
+	// }
+	// if accountID != "" {
+	// req.Header.Set("ChatGPT-Account-Id", accountID)
+	// }
+	id, reason := codexBackendIdentity(auth)
+	if reason != "" {
+		return unknown(reason)
 	}
-	if strings.TrimSpace(baseURL) == "" {
-		baseURL = codexDefaultBackendBaseURL
-	}
-	usageURL := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(baseURL), "/"), "/codex") + "/wham/usage"
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	req, errReq := http.NewRequestWithContext(ctx, http.MethodGet, usageURL, nil)
+	accountID := id.AccountID
+	req, errReq := helps.NewCodexBackendRequest(ctx, id, "usage")
 	if errReq != nil {
 		return unknown("usage request could not be built")
-	}
-	// Header set as CodexBar sends it on this read (Authorization, User-Agent,
-	// Accept, ChatGPT-Account-Id); the User-Agent value is the executor's own
-	// Codex identity, the one the same account's inference requests carry.
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("User-Agent", codexUserAgent)
-	req.Header.Set("Accept", "application/json")
-	accountID := ""
-	if auth.Metadata != nil {
-		accountID, _ = auth.Metadata["account_id"].(string)
-	}
-	if accountID != "" {
-		req.Header.Set("ChatGPT-Account-Id", accountID)
 	}
 	resp, errDo := helps.NewUtlsHTTPClient(ctx, cfg, auth, codexUsageProbeTimeout).Do(req)
 	if errDo != nil {
@@ -260,4 +271,60 @@ func codexUsageRefusal(detail string) error {
 		"message": "request refused by proxy: " + detail + "; nothing was sent upstream",
 	}})
 	return codexUsageGuardError{statusErr{code: http.StatusTooManyRequests, msg: string(body)}}
+}
+
+// codexBackendIdentity resolves the executor's active token, including SIWC.
+func codexBackendIdentity(auth *cliproxyauth.Auth) (helps.CodexBackendIdentity, string) {
+	token, baseURL := codexCreds(auth)
+	if strings.TrimSpace(token) == "" {
+		return helps.CodexBackendIdentity{}, "no access token"
+	}
+	if strings.TrimSpace(baseURL) == "" {
+		baseURL = codexDefaultBackendBaseURL
+	}
+	id := helps.CodexBackendIdentity{BaseURL: baseURL, Token: token, UserAgent: codexUserAgent}
+	if auth != nil && auth.Metadata != nil {
+		id.AccountID, _ = auth.Metadata["account_id"].(string)
+	}
+	return id, ""
+}
+
+// ReadCodexAccountUsage reads the account's plan, then its reset credits.
+// A failed second read preserves the first result and sets ResetDetailsErr.
+// The 15-second bound is the user's explicit 2026-10-25 exception to AGENTS.md:60.
+func ReadCodexAccountUsage(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth) (helps.CodexAccountUsage, error) {
+	id, reason := codexBackendIdentity(auth)
+	if reason != "" {
+		return helps.CodexAccountUsage{}, fmt.Errorf("request failed")
+	}
+	// Only the provider origin or a loopback fixture receives this button read.
+	origin, errOrigin := url.Parse(id.BaseURL)
+	if errOrigin != nil {
+		return helps.CodexAccountUsage{}, fmt.Errorf("request failed")
+	}
+	ip := net.ParseIP(origin.Hostname())
+	loopback := ip != nil && ip.IsLoopback()
+	if origin.User != nil || (!loopback && (origin.Scheme != "https" || origin.Hostname() != "chatgpt.com")) {
+		return helps.CodexAccountUsage{}, fmt.Errorf("request failed")
+	}
+	body, err := helps.ReadCodexBackend(ctx, cfg, auth, id, "usage", codexUsageProbeTimeout)
+	if err != nil {
+		return helps.CodexAccountUsage{}, err
+	}
+	result, err := helps.ParseCodexAccountUsage(body, id.AccountID)
+	if err != nil {
+		return result, err
+	}
+	body, err = helps.ReadCodexBackend(ctx, cfg, auth, id, "rate-limit-reset-credits", codexUsageProbeTimeout)
+	if err == nil {
+		var n int
+		var expiries []*time.Time
+		n, expiries, err = helps.ParseCodexResetCredits(body)
+		if err == nil {
+			result.ResetsAvailable = n
+			result.ResetExpiries = expiries
+		}
+	}
+	result.ResetDetailsErr = err
+	return result, nil
 }

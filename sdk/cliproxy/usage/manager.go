@@ -75,6 +75,8 @@ type Record struct {
 	Detail      Detail
 	// ResponseHeaders stores a snapshot of upstream response headers for usage sinks.
 	ResponseHeaders http.Header
+	// ResponseHeaderTimes stores when each ResponseHeaders key was last written, keyed by canonical header name; nil when unknown.
+	ResponseHeaderTimes map[string]time.Time
 }
 
 // Failure holds HTTP failure metadata for an upstream request attempt.

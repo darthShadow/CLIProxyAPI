@@ -603,7 +603,8 @@ func (r *UsageReporter) publishAttemptRecord(ctx context.Context, record usage.R
 }
 
 func (r *UsageReporter) publishRecord(ctx context.Context, record usage.Record) {
-	record.ResponseHeaders = internallogging.GetResponseHeaders(ctx)
+	// record.ResponseHeaders = internallogging.GetResponseHeaders(ctx)
+	record.ResponseHeaders, record.ResponseHeaderTimes = internallogging.GetResponseHeadersObserved(ctx)
 	usage.PublishRecord(ctx, record)
 }
 

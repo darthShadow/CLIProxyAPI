@@ -12,6 +12,7 @@ api-keys:
 commercial-mode: false
 logging-to-file: true
 error-logs-max-files: 10
+# Start with CPA_USAGE_DIR=usage to keep 30 days of usage for /usage-archive.html.
 usage-statistics-enabled: true
 # Quota dashboard: the pinned cliproxy-rs v0.3.0 management page, loopback
 # only. secret-key stays empty in this file, so the management API is off until
