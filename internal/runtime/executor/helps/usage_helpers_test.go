@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1464,4 +1465,63 @@ func TestUsageReporter_DistinguishesNativeKey(t *testing.T) {
 			t.Fatalf("record.AccessProvider = %q, want %q", record.AccessProvider, "config-api-key")
 		}
 	})
+}
+
+type headerObservationCapture struct {
+	requestID string
+	records   chan usage.Record
+}
+
+func (p headerObservationCapture) HandleUsage(_ context.Context, r usage.Record) {
+	if r.RequestID == p.requestID {
+		p.records <- r
+	}
+}
+
+func TestPublishRecordCarriesHeaderObservation(t *testing.T) {
+	ctx := logging.WithResponseHeadersHolder(context.Background())
+	logging.SetResponseHeaders(ctx, http.Header{
+		"X-Codex-Primary-Used-Percent":          {"20"},
+		"X-Codex-Primary-Window-Minutes":        {"300"},
+		"X-Codex-Primary-Reset-After-Seconds":   {"600"},
+		"X-Codex-Secondary-Used-Percent":        {"11"},
+		"X-Codex-Secondary-Window-Minutes":      {"10080"},
+		"X-Codex-Secondary-Reset-After-Seconds": {"2580"},
+	})
+	_, initialTimes := logging.GetResponseHeadersObserved(ctx)
+	beforeMerge := time.Now()
+	logging.MergeResponseHeaders(ctx, http.Header{
+		"X-Codex-Primary-Used-Percent":        {"40"},
+		"X-Codex-Primary-Window-Minutes":      {"300"},
+		"X-Codex-Primary-Reset-After-Seconds": {"500"},
+	})
+	afterMerge := time.Now()
+	wantHeaders, wantTimes := logging.GetResponseHeadersObserved(ctx)
+	reporter := NewUsageReporter(ctx, "codex", "fake-model", nil)
+	capture := headerObservationCapture{requestID: reporter.RequestID(), records: make(chan usage.Record, 1)}
+	usage.RegisterPlugin(capture)
+	reporter.publishRecord(ctx, usage.Record{RequestID: reporter.RequestID(), Provider: "codex"})
+	logging.MergeResponseHeaders(ctx, http.Header{
+		"X-Codex-Primary-Used-Percent":   {"99"},
+		"X-Codex-Secondary-Used-Percent": {"99"},
+	})
+	select {
+	case got := <-capture.records:
+		if got.ResponseHeaderTimes == nil {
+			t.Fatal("ResponseHeaderTimes nil, want snapshot")
+		}
+		if !reflect.DeepEqual(got.ResponseHeaders, wantHeaders) || !reflect.DeepEqual(got.ResponseHeaderTimes, wantTimes) {
+			t.Fatalf("published snapshot headers=%v times=%v, want headers=%v times=%v", got.ResponseHeaders, got.ResponseHeaderTimes, wantHeaders, wantTimes)
+		}
+		for key, at := range got.ResponseHeaderTimes {
+			if strings.HasPrefix(key, "X-Codex-Secondary-") && !at.Equal(initialTimes[key]) {
+				t.Errorf("secondary %s moved to %v", key, at)
+			}
+			if strings.HasPrefix(key, "X-Codex-Primary-") && (at.Before(beforeMerge) || at.After(afterMerge)) {
+				t.Errorf("primary %s time %v outside merge bounds", key, at)
+			}
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("usage capture not reached")
+	}
 }

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type endpointKey struct{}
@@ -32,6 +33,8 @@ type responseStatusHolder struct {
 type responseHeadersHolder struct {
 	mu      sync.RWMutex
 	headers http.Header
+
+	times map[string]time.Time
 }
 
 func WithEndpoint(ctx context.Context, endpoint string) context.Context {
@@ -123,6 +126,11 @@ func SetResponseHeaders(ctx context.Context, headers http.Header) {
 	holder.mu.Lock()
 	defer holder.mu.Unlock()
 	holder.headers = cloneHTTPHeader(headers)
+	at := time.Now()
+	holder.times = make(map[string]time.Time, len(headers))
+	for key := range headers {
+		holder.times[http.CanonicalHeaderKey(key)] = at
+	}
 }
 
 // MergeResponseHeaders adds headers observed after the initial HTTP response,
@@ -137,6 +145,10 @@ func MergeResponseHeaders(ctx context.Context, headers http.Header) {
 	}
 	holder.mu.Lock()
 	defer holder.mu.Unlock()
+	at := time.Now()
+	if holder.times == nil {
+		holder.times = make(map[string]time.Time, len(headers))
+	}
 	if holder.headers == nil {
 		holder.headers = make(http.Header, len(headers))
 	}
@@ -146,6 +158,7 @@ func MergeResponseHeaders(ctx context.Context, headers http.Header) {
 			continue
 		}
 		holder.headers[canonicalKey] = append([]string(nil), values...)
+		holder.times[canonicalKey] = at
 	}
 }
 
@@ -182,4 +195,26 @@ func cloneHTTPHeader(src http.Header) http.Header {
 		dst[key] = append([]string(nil), values...)
 	}
 	return dst
+}
+
+// GetResponseHeadersObserved returns independent header and per-key write-time snapshots.
+// Both maps are nil when ctx has no response header holder.
+func GetResponseHeadersObserved(ctx context.Context) (http.Header, map[string]time.Time) {
+	if ctx == nil {
+		return nil, nil
+	}
+	holder, ok := ctx.Value(responseHeadersKey{}).(*responseHeadersHolder)
+	if !ok || holder == nil {
+		return nil, nil
+	}
+	holder.mu.RLock()
+	defer holder.mu.RUnlock()
+	var times map[string]time.Time
+	if holder.times != nil {
+		times = make(map[string]time.Time, len(holder.times))
+		for key, at := range holder.times {
+			times[key] = at
+		}
+	}
+	return cloneHTTPHeader(holder.headers), times
 }

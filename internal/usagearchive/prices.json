@@ -1,0 +1,116 @@
+{"checked": "2026-10-25",
+ "sources": {"claude": "https://platform.claude.com/docs/en/about-claude/pricing", "codex": "https://developers.openai.com/api/docs/pricing"},
+ "models": {
+  "claude-fable-5-1": {"provider": "claude", "tiers": {
+    "standard": {"input": 10, "cache_read": 0.25, "cache_write": 12.5, "cache_write_1h": 20, "output": 50}
+  }},
+  "claude-fable-5": {"provider": "claude", "tiers": {
+    "standard": {"input": 10, "cache_read": 1, "cache_write": 12.5, "cache_write_1h": 20, "output": 50}
+  }},
+  "claude-opus-5-5": {"provider": "claude", "tiers": {
+    "standard": {"input": 4, "cache_read": 0.2, "cache_write": 5, "cache_write_1h": 8, "output": 20},
+    "fast": {"input": 8, "cache_read": 0.4, "cache_write": 10, "cache_write_1h": 16, "output": 40}
+  }},
+  "claude-opus-5": {"provider": "claude", "tiers": {
+    "standard": {"input": 5, "cache_read": 0.5, "cache_write": 6.25, "cache_write_1h": 10, "output": 25},
+    "fast": {"input": 10, "cache_read": 1, "cache_write": 12.5, "cache_write_1h": 20, "output": 50}
+  }},
+  "claude-opus-4-8": {"provider": "claude", "tiers": {
+    "standard": {"input": 5, "cache_read": 0.5, "cache_write": 6.25, "cache_write_1h": 10, "output": 25},
+    "fast": {"input": 10, "cache_read": 1, "cache_write": 12.5, "cache_write_1h": 20, "output": 50}
+  }},
+  "claude-opus-4-7": {"provider": "claude", "tiers": {
+    "standard": {"input": 5, "cache_read": 0.5, "cache_write": 6.25, "cache_write_1h": 10, "output": 25}
+  }},
+  "claude-opus-4-6": {"provider": "claude", "tiers": {
+    "standard": {"input": 5, "cache_read": 0.5, "cache_write": 6.25, "cache_write_1h": 10, "output": 25}
+  }},
+  "claude-opus-4-5": {"provider": "claude", "tiers": {
+    "standard": {"input": 5, "cache_read": 0.5, "cache_write": 6.25, "cache_write_1h": 10, "output": 25}
+  }},
+  "claude-opus-4-1": {"provider": "claude", "tiers": {
+    "standard": {"input": 15, "cache_read": 1.5, "cache_write": 18.75, "cache_write_1h": 30, "output": 75}
+  }},
+  "claude-opus-4": {"provider": "claude", "tiers": {
+    "standard": {"input": 15, "cache_read": 1.5, "cache_write": 18.75, "cache_write_1h": 30, "output": 75}
+  }},
+  "claude-sonnet-5-5": {"provider": "claude", "tiers": {
+    "standard": {"input": 2, "cache_read": 0.1, "cache_write": 2.5, "cache_write_1h": 4, "output": 10}
+  }},
+  "claude-sonnet-5": {"provider": "claude", "tiers": {
+    "standard": {"input": 2, "cache_read": 0.2, "cache_write": 2.5, "cache_write_1h": 4, "output": 10}
+  }},
+  "claude-sonnet-4-6": {"provider": "claude", "tiers": {
+    "standard": {"input": 3, "cache_read": 0.3, "cache_write": 3.75, "cache_write_1h": 6, "output": 15}
+  }},
+  "claude-sonnet-4-5": {"provider": "claude", "tiers": {
+    "standard": {"input": 3, "cache_read": 0.3, "cache_write": 3.75, "cache_write_1h": 6, "output": 15}
+  }},
+  "claude-sonnet-4": {"provider": "claude", "tiers": {
+    "standard": {"input": 3, "cache_read": 0.3, "cache_write": 3.75, "cache_write_1h": 6, "output": 15}
+  }},
+  "claude-haiku-5-5": {"provider": "claude", "long_context_above": 100000, "tiers": {
+    "standard": {"input": 0.1, "cache_read": 0.01, "cache_write": 0.125, "cache_write_1h": 0.2, "output": 0.5},
+    "standard_long": {"input": 0.5, "cache_read": 0.05, "cache_write": 0.625, "cache_write_1h": 1, "output": 2.5}
+  }},
+  "claude-haiku-4-5": {"provider": "claude", "tiers": {
+    "standard": {"input": 1, "cache_read": 0.1, "cache_write": 1.25, "cache_write_1h": 2, "output": 5}
+  }},
+  "claude-3-5-haiku": {"provider": "claude", "tiers": {
+    "standard": {"input": 0.8, "cache_read": 0.08, "cache_write": 1, "cache_write_1h": 1.6, "output": 4}
+  }},
+  "gpt-6-astra": {"provider": "codex", "long_context_above": 272000, "tiers": {
+    "standard": {"input": 10, "cache_read": 1, "cache_write": 12.5, "output": 50},
+    "fast": {"input": 20, "cache_read": 2, "cache_write": 25, "output": 100},
+    "standard_long": {"input": 20, "cache_read": 2, "cache_write": 25, "output": 75},
+    "fast_long": {"input": 40, "cache_read": 4, "cache_write": 50, "output": 150}
+  }},
+  "gpt-6.1-sol": {"provider": "codex", "long_context_above": 272000, "tiers": {
+    "standard": {"input": 2, "cache_read": 0.1, "cache_write": 2.5, "output": 10},
+    "fast": {"input": 4, "cache_read": 0.2, "cache_write": 5, "output": 20},
+    "standard_long": {"input": 4, "cache_read": 0.2, "cache_write": 5, "output": 15},
+    "fast_long": {"input": 8, "cache_read": 0.4, "cache_write": 10, "output": 30}
+  }},
+  "gpt-6-sol": {"provider": "codex", "long_context_above": 272000, "tiers": {
+    "standard": {"input": 2, "cache_read": 0.2, "cache_write": 2.5, "output": 10},
+    "fast": {"input": 4, "cache_read": 0.4, "cache_write": 5, "output": 20},
+    "standard_long": {"input": 4, "cache_read": 0.4, "cache_write": 5, "output": 15},
+    "fast_long": {"input": 8, "cache_read": 0.8, "cache_write": 10, "output": 30}
+  }},
+  "gpt-6-luna": {"provider": "codex", "long_context_above": 272000, "tiers": {
+    "standard": {"input": 0.1, "cache_read": 0.01, "cache_write": 0.125, "output": 0.5},
+    "fast": {"input": 0.2, "cache_read": 0.02, "cache_write": 0.25, "output": 1},
+    "standard_long": {"input": 0.2, "cache_read": 0.02, "cache_write": 0.25, "output": 0.75},
+    "fast_long": {"input": 0.4, "cache_read": 0.04, "cache_write": 0.5, "output": 1.5}
+  }},
+  "gpt-5.6-sol": {"provider": "codex", "long_context_above": 272000, "tiers": {
+    "standard": {"input": 4, "cache_read": 0.4, "cache_write": 5, "output": 20},
+    "fast": {"input": 8, "cache_read": 0.8, "cache_write": 10, "output": 40},
+    "standard_long": {"input": 8, "cache_read": 0.8, "cache_write": 10, "output": 30},
+    "fast_long": {"input": 16, "cache_read": 1.6, "cache_write": 20, "output": 60}
+  }},
+  "gpt-5.6-terra": {"provider": "codex", "long_context_above": 272000, "tiers": {
+    "standard": {"input": 2, "cache_read": 0.2, "cache_write": 2.5, "output": 12},
+    "fast": {"input": 4, "cache_read": 0.4, "cache_write": 5, "output": 24},
+    "standard_long": {"input": 4, "cache_read": 0.4, "cache_write": 5, "output": 18},
+    "fast_long": {"input": 8, "cache_read": 0.8, "cache_write": 10, "output": 36}
+  }},
+  "gpt-5.6-luna": {"provider": "codex", "long_context_above": 272000, "tiers": {
+    "standard": {"input": 0.2, "cache_read": 0.02, "cache_write": 0.25, "output": 1.2},
+    "fast": {"input": 0.4, "cache_read": 0.04, "cache_write": 0.5, "output": 2.4},
+    "standard_long": {"input": 0.4, "cache_read": 0.04, "cache_write": 0.5, "output": 1.8},
+    "fast_long": {"input": 0.8, "cache_read": 0.08, "cache_write": 1, "output": 3.6}
+  }},
+  "gpt-5.5": {"provider": "codex", "long_context_above": 272000, "tiers": {
+    "standard": {"input": 5, "cache_read": 0.5, "output": 30},
+    "fast": {"input": 12.5, "cache_read": 1.25, "output": 75},
+    "standard_long": {"input": 10, "cache_read": 1, "output": 45}
+  }},
+  "claude-3-7-sonnet": {"provider": "claude", "no_price": "not on the pricing page on 2026-10-25"},
+  "codex-auto-review": {"provider": "codex", "no_price": "not on the pricing page on 2026-10-25"},
+  "gpt-image-1.5": {"provider": "codex", "no_price": "U1 prices text tokens only"},
+  "gpt-image-2": {"provider": "codex", "no_price": "U1 prices text tokens only"},
+  "gpt-image-2.5": {"provider": "codex", "no_price": "U1 prices text tokens only"},
+  "gpt-image-2.5-flare": {"provider": "codex", "no_price": "U1 prices text tokens only"},
+  "gpt-image-2.5-sunburst": {"provider": "codex", "no_price": "U1 prices text tokens only"}
+ }}
