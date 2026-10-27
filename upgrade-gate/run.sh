@@ -48,6 +48,8 @@
 #   covers them;
 # - helper requests that only interactive sessions send (the fixtures run -p,
 #   entrypoint sdk-cli, or the Agent SDK, entrypoint sdk-ts);
+# - -p and interactive requests with a custom entrypoint label (sdk_ts_labels
+#   runs the Agent SDK path only);
 # - the client's TLS ClientHello (the proxy sends its own compiled hello);
 # - the effective fallbackModel and modelPicker values (F32: INCONCLUSIVE);
 # - the production transport, the OAuth identity rewrite, and CCH signer
@@ -88,7 +90,8 @@ for label in $labels; do
 	[ "$label" = old ] || cpa="${CPA_BIN:-}"
 	mkdir "$OUT/$label"
 	# for name in f1_listener_keys f24_version_pin f8_real_client f20_background_gpt f32_settings_merge f34_cloak_inputs f5_client_429 f6_billing f28_overflow f26_gpt_window sdk_ts; do
-	for name in f1_listener_keys f24_version_pin f8_real_client f20_background_gpt f32_settings_merge f34_cloak_inputs f5_client_429 f6_billing f28_overflow f26_gpt_window sdk_ts cc_wire; do
+	# for name in f1_listener_keys f24_version_pin f8_real_client f20_background_gpt f32_settings_merge f34_cloak_inputs f5_client_429 f6_billing f28_overflow f26_gpt_window sdk_ts cc_wire; do
+	for name in f1_listener_keys f24_version_pin f8_real_client f20_background_gpt f32_settings_merge f34_cloak_inputs f5_client_429 f6_billing f28_overflow f26_gpt_window sdk_ts sdk_ts_labels cc_wire; do
 		rc=0
 		script="$FIXTURE_DIR/$name.sh"; [ -f "$script" ] || script="$GATE_DIR/$name.sh"
 		# CPA_BIN="$cpa" CLAUDE_BIN="$bin" FIXTURE_TMP="$OUT/$label" "$BASH" "$FIXTURE_DIR/$name.sh" >"$OUT/$label/$name.out" 2>&1 || rc=$?

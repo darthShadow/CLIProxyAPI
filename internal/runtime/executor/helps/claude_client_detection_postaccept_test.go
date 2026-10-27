@@ -72,6 +72,24 @@ func TestDetectClaudeCodeRequestConfirmsSDKTitle(t *testing.T) {
 			headers.Set("User-Agent", strings.Replace(headers.Get("User-Agent"), "sdk-ts", "cli", 1))
 			return body
 		}},
+		{name: "shadow-code", edit: func(headers http.Header, body string) string {
+			headers.Set("User-Agent", strings.Replace(headers.Get("User-Agent"), "sdk-ts", "shadow-code", 1))
+			return body
+		}, confirmed: true},
+		{name: "t3-code", edit: func(headers http.Header, body string) string {
+			headers.Set("User-Agent", strings.Replace(headers.Get("User-Agent"), "sdk-ts", "t3-code", 1))
+			return body
+		}, confirmed: true},
+		{name: "shadow-code redact beta", edit: func(headers http.Header, body string) string {
+			headers.Set("User-Agent", strings.Replace(headers.Get("User-Agent"), "sdk-ts", "shadow-code", 1))
+			headers.Set("Anthropic-Beta", strings.Replace(headers.Get("Anthropic-Beta"), "interleaved-thinking-2025-05-14,", "interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,", 1))
+			return body
+		}},
+		{name: "t3-code redact beta", edit: func(headers http.Header, body string) string {
+			headers.Set("User-Agent", strings.Replace(headers.Get("User-Agent"), "sdk-ts", "t3-code", 1))
+			headers.Set("Anthropic-Beta", strings.Replace(headers.Get("Anthropic-Beta"), "interleaved-thinking-2025-05-14,", "interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,", 1))
+			return body
+		}},
 		{name: "beta dropped", edit: func(headers http.Header, body string) string {
 			betas := strings.Split(headers.Get("Anthropic-Beta"), ",")
 			headers.Set("Anthropic-Beta", strings.Join(betas[:len(betas)-1], ","))
@@ -145,6 +163,14 @@ func TestDetectClaudeCodeRequestConfirmsCLITitle(t *testing.T) {
 			headers.Set("User-Agent", strings.Replace(headers.Get("User-Agent"), "(external, cli)", "(external, sdk-ts, agent-sdk/0.3.290)", 1))
 			return body
 		}},
+		{name: "shadow-code", edit: func(headers http.Header, body string) string {
+			headers.Set("User-Agent", strings.Replace(headers.Get("User-Agent"), "(external, cli)", "(external, shadow-code)", 1))
+			return body
+		}, confirmed: true},
+		{name: "t3-code", edit: func(headers http.Header, body string) string {
+			headers.Set("User-Agent", strings.Replace(headers.Get("User-Agent"), "(external, cli)", "(external, t3-code)", 1))
+			return body
+		}, confirmed: true},
 		{name: "Agent SDK identity", edit: setBody("system.0.text", "You are a Claude agent, built on Anthropic's Claude Agent SDK.")},
 		{name: "beta dropped", edit: func(headers http.Header, body string) string {
 			betas := strings.Split(headers.Get("Anthropic-Beta"), ",")
@@ -203,10 +229,16 @@ func TestDetectClaudeCodeRequestConfirmsSDKWebFetch(t *testing.T) {
 		{name: "sdk-ts retry", retry: true, confirmed: true},
 		{name: "sdk-cli first try", userAgent: "claude-cli/2.1.311 (external, sdk-cli)", confirmed: true},
 		{name: "sdk-cli retry", userAgent: "claude-cli/2.1.311 (external, sdk-cli)", retry: true, confirmed: true},
+		{name: "t3-code first try", userAgent: strings.Replace(record.Headers["User-Agent"], "sdk-ts", "t3-code", 1), confirmed: true},
+		{name: "t3-code retry", userAgent: strings.Replace(record.Headers["User-Agent"], "sdk-ts", "t3-code", 1), retry: true, confirmed: true},
+		{name: "t3-code -p first try", userAgent: "claude-cli/2.1.311 (external, t3-code)", confirmed: true},
+		{name: "t3-code -p retry", userAgent: "claude-cli/2.1.311 (external, t3-code)", retry: true, confirmed: true},
+		{name: "shadow-code", userAgent: strings.Replace(record.Headers["User-Agent"], "sdk-ts", "shadow-code", 1), confirmed: true},
 		{name: "cli entrypoint", userAgent: "claude-cli/2.1.311 (external, cli)"},
 		{name: "sdk-py entrypoint", userAgent: strings.Replace(record.Headers["User-Agent"], "sdk-ts", "sdk-py", 1)},
 		{name: "structured-outputs beta", betas: "interleaved-thinking-2025-05-14,context-management-2025-06-27,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,thinking-token-count-2026-05-13,effort-2025-11-24,structured-outputs-2025-12-15"},
 		{name: "redact beta", betas: strings.Replace(record.Headers["anthropic-beta"], "interleaved-thinking-2025-05-14,", "interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,", 1)},
+		{name: "t3-code redact beta", userAgent: strings.Replace(record.Headers["User-Agent"], "sdk-ts", "t3-code", 1), betas: strings.Replace(record.Headers["anthropic-beta"], "interleaved-thinking-2025-05-14,", "interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,", 1)},
 		{name: "CLI identity", edit: setBody("system.0.text", claudeCodeCLIIdentity)},
 		{name: "output format", edit: setBody("output_config.format", map[string]any{"type": "json_schema", "schema": map[string]any{"type": "object", "properties": map[string]any{"title": map[string]any{"type": "string"}}, "required": []string{"title"}, "additionalProperties": false}})},
 		{name: "other effort", edit: setBody("output_config.effort", "high")},
@@ -276,8 +308,13 @@ func TestDetectClaudeCodeRequestConfirmsCLIWebFetch(t *testing.T) {
 	}{
 		{name: "cli first try", confirmed: true},
 		{name: "cli retry", retry: true, confirmed: true},
+		{name: "t3-code first try", userAgent: "claude-cli/2.1.311 (external, t3-code)", confirmed: true},
+		{name: "t3-code retry", userAgent: "claude-cli/2.1.311 (external, t3-code)", retry: true, confirmed: true},
+		{name: "shadow-code", userAgent: "claude-cli/2.1.311 (external, shadow-code)", confirmed: true},
 		{name: "showThinkingSummaries on", thinkingSummaries: true, confirmed: true},
 		{name: "showThinkingSummaries on retry", thinkingSummaries: true, retry: true, confirmed: true},
+		{name: "t3-code showThinkingSummaries on", userAgent: "claude-cli/2.1.311 (external, t3-code)", thinkingSummaries: true, confirmed: true},
+		{name: "t3-code showThinkingSummaries on retry", userAgent: "claude-cli/2.1.311 (external, t3-code)", thinkingSummaries: true, retry: true, confirmed: true},
 		{name: "sdk-ts entrypoint", userAgent: "claude-cli/2.1.311 (external, sdk-ts, agent-sdk/0.3.290)"},
 		{name: "sdk-cli entrypoint", userAgent: "claude-cli/2.1.311 (external, sdk-cli)"},
 		{name: "Agent SDK identity", edit: setBody("system.0.text", claudeCodeSDKIdentity)},

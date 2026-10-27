@@ -340,6 +340,10 @@ func clientLabel(client string) string {
 	switch client {
 	case "claude-code-cli":
 		return "Claude Code CLI"
+	case "claude-code-shadow":
+		return "Shadow Code"
+	case "claude-code-t3":
+		return "T3 Code"
 	case "claude-code-sdk-ts", "claude-code-sdk-py", "claude-code-cli-sdk":
 		return "Agent SDK"
 	case "codex":

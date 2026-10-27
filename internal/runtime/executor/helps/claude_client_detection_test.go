@@ -142,6 +142,8 @@ func TestDetectClaudeCodeRequestClassifiesEntrypoints(t *testing.T) {
 		native          bool
 	}{
 		{name: "cli", userAgent: "claude-cli/2.1.280 (external, cli)", entrypoint: "cli", subclient: "claude-code-cli", native: true},
+		{name: "shadow-code", userAgent: "claude-cli/2.1.280 (external, shadow-code)", entrypoint: "shadow-code", subclient: "claude-code-shadow", native: true},
+		{name: "t3-code-agent-sdk", userAgent: "claude-cli/2.1.280 (external, t3-code, agent-sdk/0.3.290)", entrypoint: "t3-code", subclient: "claude-code-t3", agentSDKVersion: "0.3.290", native: true},
 		{name: "vscode-agent-sdk", userAgent: "claude-cli/2.1.280 (external, claude-vscode, agent-sdk/0.3.220)", entrypoint: "claude-vscode", subclient: "claude-code-vscode", agentSDKVersion: "0.3.220", native: true},
 		{name: "sdk-cli", userAgent: "claude-cli/2.1.280 (external, sdk-cli)", entrypoint: "sdk-cli", subclient: "claude-code-cli-sdk", native: true},
 		{name: "sdk-ts", userAgent: "claude-cli/2.1.280 (external, sdk-ts, agent-sdk/0.3.220)", entrypoint: "sdk-ts", subclient: "claude-code-sdk-ts", agentSDKVersion: "0.3.220", native: true},
@@ -240,6 +242,32 @@ func TestDetectClaudeCodeRequestRecognizesMeasuredHaikuHelpers(t *testing.T) {
 				t.Fatalf("claude-code beta signal = true, want helper profile to remain separate: %#v", detection)
 			}
 		})
+	}
+}
+
+func TestDetectClaudeCodeRequestRecognizesCustomLabelHelpers(t *testing.T) {
+	for _, label := range []string{"shadow-code", "t3-code"} {
+		for _, test := range []struct {
+			name    string
+			beta    string
+			payload []byte
+		}{
+			{name: "minimal", beta: claudeCodeHelperBetaProfile(true), payload: measuredClaudeCodeMinimalHelperPayload()},
+			{name: "structured", beta: claudeCodeHelperBetaProfile(true, "structured-outputs-2025-12-15"), payload: []byte(strings.Replace(string(measuredClaudeCodeStructuredHelperPayload()), "cc_entrypoint=cli", "cc_entrypoint="+label, 1))},
+			{name: "title 2.1.280", beta: claudeCodeHelperBetaProfile(true, "structured-outputs-2025-12-15", "server-side-fallback-2026-06-01", "fallback-credit-2026-06-01", "cache-diagnosis-2026-04-07"), payload: measuredClaudeCodeTitle280HelperPayload()},
+		} {
+			t.Run(label+"/"+test.name, func(t *testing.T) {
+				headers := measuredClaudeCodeHelperHeaders(test.beta)
+				headers.Set("User-Agent", strings.Replace(headers.Get("User-Agent"), "(external, cli)", "(external, "+label+")", 1))
+				detection := DetectClaudeCodeRequest(headers, test.payload, false)
+				if !detection.Confirmed || !detection.StrongSignals || !detection.NativeClient || !detection.HelperProfile {
+					t.Fatalf("detection = %#v, want confirmed custom label helper", detection)
+				}
+				if detection.BetasPresent || detection.Entrypoint != label {
+					t.Fatalf("detection = %#v, want no Claude Code beta and entrypoint %q", detection, label)
+				}
+			})
+		}
 	}
 }
 
@@ -644,6 +672,10 @@ func TestDetectClaudeCodeRequestMatchesBillingEntrypointExactly(t *testing.T) {
 		{name: "sdk-ts suffix", entrypoint: "sdk-ts", billing: "cc_entrypoint=sdk-ts-x"},
 		{name: "sdk-ts suffix cch", entrypoint: "sdk-ts", billing: "cc_entrypoint=sdk-ts-x; cch=00000;"},
 		{name: "cli suffix", entrypoint: "cli", billing: "cc_entrypoint=cli-extra"},
+		{name: "shadow-code exact", entrypoint: "shadow-code", billing: "cc_entrypoint=shadow-code", want: true},
+		{name: "t3-code exact", entrypoint: "t3-code", billing: "cc_entrypoint=t3-code", want: true},
+		{name: "shadow-code suffix", entrypoint: "shadow-code", billing: "cc_entrypoint=shadow-code-extra"},
+		{name: "t3-code suffix", entrypoint: "t3-code", billing: "cc_entrypoint=t3-code-extra"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			headers := measuredClaudeCodeHelperHeaders(titleBetas)

@@ -93,7 +93,8 @@ func TestModelDetailsRatios(t *testing.T) {
 	if rows[0].Clients != "Claude Code CLI 92.0%, Agent SDK 8.0%" || rows[1].Clients != "Codex 100.0%" {
 		t.Errorf("client shares=%q, %q", rows[0].Clients, rows[1].Clients)
 	}
-	for client, want := range map[string]string{"claude-code-cli": "Claude Code CLI", "claude-code-sdk-ts": "Agent SDK", "claude-code-sdk-py": "Agent SDK", "claude-code-cli-sdk": "Agent SDK", "codex": "Codex", "": "Not Recorded", "claude-other": "claude-other"} {
+	// for client, want := range map[string]string{"claude-code-cli": "Claude Code CLI", "claude-code-sdk-ts": "Agent SDK", "claude-code-sdk-py": "Agent SDK", "claude-code-cli-sdk": "Agent SDK", "codex": "Codex", "": "Not Recorded", "claude-other": "claude-other"} {
+	for client, want := range map[string]string{"claude-code-cli": "Claude Code CLI", "claude-code-sdk-ts": "Agent SDK", "claude-code-sdk-py": "Agent SDK", "claude-code-cli-sdk": "Agent SDK", "codex": "Codex", "": "Not Recorded", "claude-other": "claude-other", "claude-code-shadow": "Shadow Code", "claude-code-t3": "T3 Code"} {
 		if got := clientLabel(client); got != want {
 			t.Errorf("clientLabel(%q)=%q want %q", client, got, want)
 		}

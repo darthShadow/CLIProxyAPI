@@ -58,6 +58,11 @@ var claudeCodeSubclientByEntrypoint = map[string]string{
 	"ssh-remote":                "claude-ssh-remote",
 	"claude-coworker":           "claude-coworker",
 	"claude-coworker-terminal":  "claude-coworker-terminal",
+	// User-set CLAUDE_CODE_ENTRYPOINT labels, measured on Claude Code 2.1.310-2.1.311:
+	// interactive and Agent SDK requests keep the stock request shapes, and -p
+	// requests carry the label in the User-Agent and billing.
+	"shadow-code": "claude-code-shadow",
+	"t3-code":     "claude-code-t3",
 }
 
 // Only product surfaces with verified 2.1.220+ wire behavior are eligible for
@@ -68,6 +73,11 @@ var nativeClaudeEntrypoints = map[string]bool{
 	"sdk-cli":       true,
 	"sdk-ts":        true,
 	"claude-vscode": true,
+	// User-set CLAUDE_CODE_ENTRYPOINT labels, measured on Claude Code 2.1.310-2.1.311:
+	// interactive and Agent SDK requests keep the stock request shapes, and -p
+	// requests carry the label in the User-Agent and billing.
+	"shadow-code": true,
+	"t3-code":     true,
 }
 
 type claudeCodeHelperShape uint8
@@ -211,6 +221,7 @@ func matchesMeasuredClaudeCodeHelperProfile(
 	shape := measuredClaudeCodeHelperBetaProfiles[normalizedClaudeBetaHeader(headers)]
 	// The 2.1.311 title and WebFetch entrypoints depend on the system identity
 	// and beta list; WebFetch also comes from sdk-cli. Other helpers use cli.
+	// A custom label stands in for cli or sdk-ts.
 	entrypoint := "cli"
 	if shape == claudeCodeHelperShapeTitleSDK {
 		entrypoint = claudeCodeTitleEntrypoint(payload, normalizedClaudeBetaHeader(headers))
@@ -218,7 +229,8 @@ func matchesMeasuredClaudeCodeHelperProfile(
 		entrypoint = claudeCodeWebFetchEntrypoint(payload, normalizedClaudeBetaHeader(headers), detection.Entrypoint)
 	}
 	if shape != claudeCodeHelperShapeNone &&
-		detection.Entrypoint == entrypoint &&
+		// detection.Entrypoint == entrypoint &&
+		(detection.Entrypoint == entrypoint || entrypoint != "" && (detection.Entrypoint == "shadow-code" || detection.Entrypoint == "t3-code")) &&
 		measuredClaudeCodeHelperBodyShape(payload) == shape &&
 		measuredClaudeCodeHelperHeadersMatch(headers, cfg, shape) &&
 		measuredClaudeCodeHelperSessionMatches(headers, payload) {
